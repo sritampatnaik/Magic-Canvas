@@ -2,16 +2,6 @@
 
 A keyboard-less and mouse-less multiplayer whiteboard that uses webcam gestures and voice control for a fully hands-free collaborative drawing experience.
 
-<div align="center">
-  <img src="[https://supabase.com/brand-assets/supabase-logo-wordmark--light.svg](https://brandlogos.net/wp-content/uploads/2025/07/supabase-logo_brandlogos.net_wahxg-scaled.png)" alt="Supabase" height="40"/>
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://elevenlabs.io/brand/11labs_logo_black.svg" alt="ElevenLabs" height="40"/>
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="https://fal.ai/logo.svg" alt="Fal.ai" height="40"/>
-  &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="public/gemini.png" alt="Google Gemini" height="40"/>
-</div>
-
 <br/>
 
 ## What I Built
