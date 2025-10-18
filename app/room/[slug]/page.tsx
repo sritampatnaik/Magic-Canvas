@@ -30,6 +30,7 @@ export default function RoomPage() {
   const draggingImageIdRef = useRef<string | null>(null);
   const dragOffsetRef = useRef<Point>({ x: 0, y: 0 });
   const [tool, setTool] = useState<"cursor" | "pen" | "image">("cursor");
+  const activeStrokeIndexByIdRef = useRef<Record<string, number>>({});
 
   const onAddImage = async () => {
     try {
@@ -153,6 +154,7 @@ export default function RoomPage() {
       channel.send({ type: "broadcast", event: "cursor", payload: { key: connId, x, y } });
       if (tool === "pen" && currentStrokeRef.current) {
         currentStrokeRef.current.points.push({ x, y });
+        channel.send({ type: "broadcast", event: "stroke-append", payload: { id: currentStrokeRef.current.id, point: { x, y } } });
       }
       if (tool === "cursor" && draggingImageIdRef.current) {
         const id = draggingImageIdRef.current;
@@ -188,7 +190,7 @@ export default function RoomPage() {
 
     const onUp = () => {
       if (tool === "pen" && currentStrokeRef.current) {
-        channel.send({ type: "broadcast", event: "stroke", payload: currentStrokeRef.current });
+        channel.send({ type: "broadcast", event: "stroke-end", payload: { id: currentStrokeRef.current.id } });
         currentStrokeRef.current = null;
       }
       if (tool === "cursor" && draggingImageIdRef.current) {
@@ -201,7 +203,32 @@ export default function RoomPage() {
 
     channel.on("broadcast", { event: "stroke" }, ({ payload }) => {
       const stroke = payload as Stroke;
-      strokesRef.current = [...strokesRef.current, stroke];
+      const idx = strokesRef.current.findIndex((s) => s.id === stroke.id);
+      if (idx === -1) {
+        strokesRef.current = [...strokesRef.current, stroke];
+      } else {
+        strokesRef.current[idx] = stroke;
+      }
+    });
+
+    channel.on("broadcast", { event: "stroke-start" }, ({ payload }) => {
+      const s = payload as Stroke;
+      strokesRef.current = [...strokesRef.current, { ...s }];
+      activeStrokeIndexByIdRef.current[s.id] = strokesRef.current.length - 1;
+    });
+
+    channel.on("broadcast", { event: "stroke-append" }, ({ payload }) => {
+      const { id, point } = payload as { id: string; point: Point };
+      const idx = activeStrokeIndexByIdRef.current[id];
+      if (idx == null) return;
+      const s = strokesRef.current[idx];
+      if (!s) return;
+      s.points.push(point);
+    });
+
+    channel.on("broadcast", { event: "stroke-end" }, ({ payload }) => {
+      const { id } = payload as { id: string };
+      delete activeStrokeIndexByIdRef.current[id];
     });
 
     channel.on("broadcast", { event: "image-add" }, ({ payload }) => {
