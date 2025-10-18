@@ -14,8 +14,9 @@ export async function POST(request: Request) {
 			return NextResponse.json({ error: error.message }, { status: 500 });
 		}
 		return NextResponse.json({ slug, url: `${origin}/room/${slug}/join` });
-	} catch (e: any) {
-		return NextResponse.json({ error: e?.message ?? 'Unexpected error' }, { status: 500 });
+	} catch (e: unknown) {
+		const message = e instanceof Error ? e.message : 'Unexpected error';
+		return NextResponse.json({ error: message }, { status: 500 });
 	}
 }
 

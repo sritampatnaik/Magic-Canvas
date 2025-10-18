@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* Force light theme */
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -12,12 +13,7 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+/* Remove dark scheme override */
 
 body {
   background: var(--background);

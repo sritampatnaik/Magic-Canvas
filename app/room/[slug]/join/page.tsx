@@ -12,6 +12,7 @@ export default function JoinPage() {
 
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState("😀");
+  const [shareUrl, setShareUrl] = useState<string>("");
 
   useEffect(() => {
     try {
@@ -21,6 +22,10 @@ export default function JoinPage() {
         if (parsed?.name) setName(parsed.name);
         if (parsed?.avatar) setAvatar(parsed.avatar);
       }
+    } catch {}
+    // Compute share URL after mount to avoid SSR mismatch
+    try {
+      setShareUrl(`${window.location.origin}/room/${slug}/join`);
     } catch {}
   }, []);
 
@@ -57,7 +62,7 @@ export default function JoinPage() {
         </div>
         <div className="pt-4">
           <p className="text-sm text-gray-500 mb-2">Invite others with this link:</p>
-          <ShareLink url={typeof window !== 'undefined' ? `${window.location.origin}/room/${slug}/join` : ''} />
+          <ShareLink url={shareUrl} />
         </div>
       </div>
     </main>
