@@ -7,6 +7,7 @@ import ShareLink from "@/components/ShareLink";
 import { fal } from "@fal-ai/client";
 import { createHandDetector, createGestureRecognizer } from "@/lib/hand/mediapipe";
 import type { RealtimeChannel } from "@supabase/supabase-js";
+import { Conversation } from "@elevenlabs/client";
 
 type PeerMeta = { name: string; avatar: string; color: string };
 type Cursor = { x: number; y: number; t: number };
@@ -70,6 +71,30 @@ export default function RoomPage() {
   const [tool, setTool] = useState<"cursor" | "pen" | "image" | "eraser" | "select">("cursor");
   const activeStrokeIndexByIdRef = useRef<Record<string, number>>({});
   const [handAndGesturesEnabled, setHandAndGesturesEnabled] = useState(false);
+  
+  // ElevenLabs state
+  const conversationRef = useRef<Conversation | null>(null);
+  const elevenLabsEnabledRef = useRef<boolean>(false);
+  const elevenLabsInitializingRef = useRef<boolean>(false);
+  const lastThumbGestureRef = useRef<number>(0);
+  const [elevenLabsActive, setElevenLabsActive] = useState(false);
+
+  // Color name to hex mapping
+  const parseColorName = (colorName: string): string => {
+    const colorMap: Record<string, string> = {
+      red: '#ef4444', darkred: '#b91c1c', lightred: '#fca5a5',
+      blue: '#3b82f6', darkblue: '#1e40af', lightblue: '#93c5fd',
+      green: '#10b981', darkgreen: '#047857', lightgreen: '#6ee7b7',
+      yellow: '#eab308', darkyellow: '#a16207', lightyellow: '#fde047',
+      purple: '#a855f7', darkpurple: '#7e22ce', lightpurple: '#d8b4fe',
+      orange: '#f97316', darkorange: '#c2410c', lightorange: '#fdba74',
+      pink: '#ec4899', darkpink: '#be185d', lightpink: '#f9a8d4',
+      black: '#000000', white: '#ffffff', gray: '#6b7280', grey: '#6b7280',
+      brown: '#92400e', cyan: '#06b6d4', teal: '#14b8a6',
+    };
+    const normalized = colorName.toLowerCase().replace(/[\s-]/g, '');
+    return colorMap[normalized] || color;
+  };
 
   const onAddImage = async () => {
     try {
@@ -81,6 +106,143 @@ export default function RoomPage() {
       });
       channelRef.current?.send({ type: "broadcast", event: "image-add", payload: item });
     } catch {}
+  };
+
+  // ElevenLabs conversation lifecycle
+  const startElevenLabs = async () => {
+    // Prevent multiple simultaneous initialization attempts
+    if (elevenLabsEnabledRef.current || elevenLabsInitializingRef.current) {
+      console.log('[ElevenLabs] Already active or initializing, skipping...');
+      return;
+    }
+    
+    elevenLabsInitializingRef.current = true;
+    
+    try {
+      console.log('[ElevenLabs] Starting conversation...');
+      const res = await fetch('/api/elevenlabs/signed-url');
+      const { signedUrl, error } = await res.json();
+      
+      if (error || !signedUrl) {
+        console.error('[ElevenLabs] Failed to get signed URL:', error);
+        elevenLabsInitializingRef.current = false;
+        return;
+      }
+
+      const conversation = await Conversation.startSession({
+        signedUrl,
+        onConnect: () => {
+          console.log('[ElevenLabs] Connected');
+          elevenLabsEnabledRef.current = true;
+          elevenLabsInitializingRef.current = false;
+          setElevenLabsActive(true);
+        },
+        onDisconnect: () => {
+          console.log('[ElevenLabs] Disconnected');
+          elevenLabsEnabledRef.current = false;
+          elevenLabsInitializingRef.current = false;
+          setElevenLabsActive(false);
+        },
+        onError: (error) => {
+          console.error('[ElevenLabs] Error:', error);
+        },
+        onModeChange: (mode) => {
+          console.log('[ElevenLabs] Mode changed:', mode);
+        },
+        onMCPToolCall: async (toolCall: { tool_name: string; parameters?: Record<string, string> }) => {
+          console.log('[ElevenLabs] Tool call:', toolCall);
+        
+        if (toolCall.tool_name === 'change_pen_color') {
+          const colorName = toolCall.parameters?.color;
+          if (colorName) {
+            const newColor = parseColorName(colorName);
+            setTool('pen');
+            toolByKeyRef.current[connId] = { tool: 'pen', color: newColor };
+            channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color: newColor } });
+            return { success: true, message: `Pen color changed to ${colorName}` };
+          }
+        } else if (toolCall.tool_name === 'generate_image') {
+          const prompt = toolCall.parameters?.prompt;
+          if (!selectionRectRef.current) {
+            return { success: false, message: 'Please select an area on the canvas first using the Victory gesture or Select Area tool' };
+          }
+          
+          try {
+            // Use the same generation logic but with dynamic prompt
+            const rect = selectionRectRef.current;
+            const canvas = canvasRef.current!;
+            const dpr = Math.max(1, window.devicePixelRatio || 1);
+            const src = document.createElement('canvas');
+            const sctx = src.getContext('2d')!;
+            const sw = Math.max(1, Math.floor(rect.w * dpr));
+            const sh = Math.max(1, Math.floor(rect.h * dpr));
+            src.width = sw;
+            src.height = sh;
+            sctx.fillStyle = '#ffffff';
+            sctx.fillRect(0, 0, sw, sh);
+            sctx.drawImage(canvas, Math.floor(rect.x * dpr), Math.floor(rect.y * dpr), sw, sh, 0, 0, sw, sh);
+            const sized = document.createElement('canvas');
+            const szctx = sized.getContext('2d')!;
+            sized.width = 512; sized.height = 512;
+            szctx.imageSmoothingEnabled = true;
+            szctx.imageSmoothingQuality = 'high';
+            szctx.drawImage(src, 0, 0, sized.width, sized.height);
+            const dataUrl = sized.toDataURL('image/png');
+            
+            setGenerating(true);
+            type FalGenResult = { data?: { images?: Array<{ url: string }> }; images?: Array<{ url: string }> };
+            const result = await fal.subscribe('fal-ai/nano-banana/edit', {
+              input: { prompt: prompt || 'abstract painting', image_urls: [dataUrl], sync_mode: true } as any,
+              pollInterval: 1500,
+              logs: false,
+            }) as FalGenResult;
+            
+            const url = result?.data?.images?.[0]?.url || result?.images?.[0]?.url;
+            if (url) {
+              const item: ImageItem = { id: crypto.randomUUID(), url, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+              const loaded = await loadImageItem(item);
+              imagesRef.current = [...imagesRef.current, loaded];
+              channelRef.current?.send({ type: 'broadcast', event: 'image-add', payload: item });
+              selectionByKeyRef.current[connId] = null;
+              selectionRectRef.current = null;
+              setShowGenerate(false);
+              setGenerating(false);
+              return { success: true, message: 'Image generated successfully' };
+            }
+            setGenerating(false);
+            return { success: false, message: 'Failed to generate image' };
+          } catch (error: any) {
+            setGenerating(false);
+            return { success: false, message: error.message || 'Error generating image' };
+          }
+        }
+        
+        return { success: false, message: 'Unknown tool' };
+        },
+      });
+
+      conversationRef.current = conversation;
+
+    } catch (error) {
+      console.error('[ElevenLabs] Failed to start:', error);
+      elevenLabsEnabledRef.current = false;
+      elevenLabsInitializingRef.current = false;
+      setElevenLabsActive(false);
+    }
+  };
+
+  const stopElevenLabs = async () => {
+    if (conversationRef.current) {
+      try {
+        await conversationRef.current.endSession();
+      } catch (error) {
+        console.error('[ElevenLabs] Error stopping conversation:', error);
+      }
+      conversationRef.current = null;
+    }
+    elevenLabsEnabledRef.current = false;
+    elevenLabsInitializingRef.current = false;
+    setElevenLabsActive(false);
   };
 
   function eraseAtPoint(x: number, y: number) {
@@ -291,7 +453,7 @@ export default function RoomPage() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       if (tool === "pen") {
-        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color, width: 3, userId: self.id };
+        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color, width: 3, userId: self?.id || connId };
         currentStrokeRef.current = stroke;
         strokesRef.current = [...strokesRef.current, stroke];
       } else if (tool === "select") {
@@ -301,7 +463,7 @@ export default function RoomPage() {
         selectionByKeyRef.current[connId] = selectionRectRef.current;
         channelRef.current?.send({ type: 'broadcast', event: 'selection-start', payload: { key: connId, x, y } });
       } else if (tool === "eraser") {
-        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color: '#000', width: 48, userId: self.id, mode: 'erase' };
+        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color: '#000', width: 48, userId: self?.id || connId, mode: 'erase' };
         currentStrokeRef.current = stroke;
         strokesRef.current = [...strokesRef.current, stroke];
         channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
@@ -413,6 +575,10 @@ export default function RoomPage() {
       window.removeEventListener("resize", onResize);
       channel.unsubscribe();
       cancelAnimationFrame(raf);
+      // Cleanup ElevenLabs on unmount
+      if (conversationRef.current) {
+        conversationRef.current.endSession().catch(() => {});
+      }
     };
   }, [slug, self, color, tool, connId]);
 
@@ -556,6 +722,10 @@ export default function RoomPage() {
                     handEnabledRef.current = false;
                     gesturesEnabledRef.current = false;
                     setHandAndGesturesEnabled(false);
+                    // Stop ElevenLabs if active
+                    if (elevenLabsEnabledRef.current) {
+                      stopElevenLabs();
+                    }
                     if (streamRef.current) {
                       streamRef.current.getTracks().forEach((t) => t.stop());
                       streamRef.current = null;
@@ -647,6 +817,22 @@ export default function RoomPage() {
                             channel.send({ type: "broadcast", event: "gesture", payload: { key: connId, emoji } });
                             gestureByKeyRef.current[connId] = emoji;
                           }
+                          
+                          // ElevenLabs activation via Thumb gestures (with debouncing)
+                          if (name === 'Thumb_Up' && !elevenLabsEnabledRef.current) {
+                            const now = performance.now();
+                            if (now - lastThumbGestureRef.current > 1000) {
+                              lastThumbGestureRef.current = now;
+                              startElevenLabs();
+                            }
+                          } else if (name === 'Thumb_Down' && elevenLabsEnabledRef.current) {
+                            const now = performance.now();
+                            if (now - lastThumbGestureRef.current > 1000) {
+                              lastThumbGestureRef.current = now;
+                              stopElevenLabs();
+                            }
+                          }
+                          
                           // Gesture-to-tool mapping (broadcast tool state)
                           if (!currentStrokeRef.current && name) {
                             if (name === 'Pointing_Up' && tool !== 'pen') {
@@ -665,7 +851,7 @@ export default function RoomPage() {
                             const hx = (1 - tip.x) * rect.width;
                             const hy = tip.y * rect.height;
                             if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
-                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color, width: 3, userId: self.id };
+                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color, width: 3, userId: self?.id || connId };
                               currentStrokeRef.current = stroke;
                               strokesRef.current = [...strokesRef.current, stroke];
                               channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
@@ -685,7 +871,7 @@ export default function RoomPage() {
                             const hy = tip.y * rect.height;
                             // gesture-based erase stroke (destination-out)
                             if (!currentStrokeRef.current || currentStrokeRef.current.mode !== 'erase') {
-                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: '#000', width: 48, userId: self.id, mode: 'erase' };
+                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: '#000', width: 48, userId: self?.id || connId, mode: 'erase' };
                               currentStrokeRef.current = stroke;
                               strokesRef.current = [...strokesRef.current, stroke];
                               channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
@@ -759,6 +945,22 @@ export default function RoomPage() {
                               channel.send({ type: "broadcast", event: "gesture", payload: { key: connId, emoji } });
                               gestureByKeyRef.current[connId] = emoji;
                             }
+                            
+                            // ElevenLabs activation via Thumb gestures (with debouncing)
+                            if (name === 'Thumb_Up' && !elevenLabsEnabledRef.current) {
+                              const now = performance.now();
+                              if (now - lastThumbGestureRef.current > 1000) {
+                                lastThumbGestureRef.current = now;
+                                startElevenLabs();
+                              }
+                            } else if (name === 'Thumb_Down' && elevenLabsEnabledRef.current) {
+                              const now = performance.now();
+                              if (now - lastThumbGestureRef.current > 1000) {
+                                lastThumbGestureRef.current = now;
+                                stopElevenLabs();
+                              }
+                            }
+                            
                             if (!currentStrokeRef.current && name) {
                               if (name === 'Pointing_Up' && tool !== 'pen') {
                                 setTool('pen');
@@ -775,7 +977,7 @@ export default function RoomPage() {
                               const hx = (1 - tip.x) * rect.width;
                               const hy = tip.y * rect.height;
                               if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
-                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color, width: 3, userId: self.id };
+                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color, width: 3, userId: self?.id || connId };
                                 currentStrokeRef.current = stroke;
                                 strokesRef.current = [...strokesRef.current, stroke];
                                 channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
@@ -794,7 +996,7 @@ export default function RoomPage() {
                               const hx = (1 - tip.x) * rect.width;
                               const hy = tip.y * rect.height;
                               if (!currentStrokeRef.current || currentStrokeRef.current.mode !== 'erase') {
-                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: '#000', width: 48, userId: self.id, mode: 'erase' };
+                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: '#000', width: 48, userId: self?.id || connId, mode: 'erase' };
                                 currentStrokeRef.current = stroke;
                                 strokesRef.current = [...strokesRef.current, stroke];
                                 channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
@@ -848,6 +1050,14 @@ export default function RoomPage() {
               >
                 Hands-Off Mode
               </button>
+              {elevenLabsActive && (
+                <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-red-50 border border-red-200">
+                  <svg className="w-3.5 h-3.5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M7 4a3 3 0 016 0v6a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" />
+                  </svg>
+                  <span className="text-xs font-medium text-red-700">Voice Active</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
