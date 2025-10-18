@@ -150,11 +150,7 @@ export default function RoomPage() {
       const w = canvas.width;
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
-      // images under
-      for (const item of imagesRef.current) {
-        if (item.img && item.img.complete) ctx.drawImage(item.img, item.x, item.y, item.w, item.h);
-      }
-      // strokes over: render draw/erase using compositing
+      // strokes first
       ctx.save();
       ctx.lineJoin = 'round';
       ctx.lineCap = 'round';
@@ -175,6 +171,11 @@ export default function RoomPage() {
         ctx.stroke();
       }
       ctx.restore();
+
+      // images on top of strokes
+      for (const item of imagesRef.current) {
+        if (item.img && item.img.complete) ctx.drawImage(item.img, item.x, item.y, item.w, item.h);
+      }
 
       // render selection rectangles
       for (const [id, rect] of Object.entries(selectionByKeyRef.current)) {
@@ -466,34 +467,30 @@ export default function RoomPage() {
                 const upRes = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl, contentType: 'image/png' }) });
                 const upJson = await upRes.json();
                 const initUrl = upJson?.url;
-                type FalGenResult = { images?: Array<{ url: string }> };
+                type FalGenResult = { data?: { images?: Array<{ url: string }> }; images?: Array<{ url: string }> };
                 // Prefer image-to-image nano-banana edit with inline base64
+                console.log('[FAL] Calling fal-ai/nano-banana/edit...');
                 const result = await fal.subscribe('fal-ai/nano-banana/edit', {
                   input: { prompt, image_urls: [dataUrl], sync_mode: true } as any,
                   pollInterval: 1500,
                   logs: false,
                 }) as FalGenResult;
-                const url = result?.images?.[0]?.url;
-                if (!url) return;
-                // Keep selection visible until after placement
-                const imgRes = await fetch(url);
-                const imgBlob = await imgRes.blob();
-                const objectUrl = URL.createObjectURL(imgBlob);
-                const item: ImageItem = { id: crypto.randomUUID(), url, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
-                // Load locally from objectUrl, broadcast fal URL
-                const loaded = await loadImageItem(item, objectUrl);
-                imagesRef.current = [...imagesRef.current, loaded];
-                // Immediate draw to replace selection area
-                const ctx = canvasRef.current?.getContext('2d');
-                if (ctx && loaded.img) {
-                  const dprDraw = Math.max(1, window.devicePixelRatio || 1);
-                  ctx.save();
-                  ctx.setTransform(dprDraw, 0, 0, dprDraw, 0, 0);
-                  ctx.drawImage(loaded.img, rect.x, rect.y, rect.w, rect.h);
-                  ctx.restore();
+                console.log('[FAL] Result:', result);
+                const url = result?.data?.images?.[0]?.url || result?.images?.[0]?.url;
+                console.log('[FAL] Image URL:', url);
+                if (!url) {
+                  console.error('[FAL] No image URL returned');
+                  return;
                 }
+                // Create image item and load it
+                const item: ImageItem = { id: crypto.randomUUID(), url, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+                console.log('[FAL] Loading image item:', item);
+                const loaded = await loadImageItem(item);
+                console.log('[FAL] Image loaded:', loaded, 'img:', loaded.img, 'img.complete:', loaded.img?.complete, 'img.width:', loaded.img?.width, 'img.height:', loaded.img?.height);
+                imagesRef.current = [...imagesRef.current, loaded];
+                console.log('[FAL] Added to imagesRef, total images:', imagesRef.current.length);
                 channelRef.current?.send({ type: 'broadcast', event: 'image-add', payload: item });
-                // Now clear local selection overlay
+                // Clear local selection overlay after successful placement
                 selectionByKeyRef.current[connId] = null;
                 selectionRectRef.current = null;
                 setShowGenerate(false);
@@ -1030,9 +1027,10 @@ function hitImage(item: ImageItem, x: number, y: number) {
 async function loadImageItem(item: ImageItem, sourceOverride?: string): Promise<ImageItem> {
   return new Promise((resolve) => {
     const src = sourceOverride || item.url;
+    const isBlobOrData = src.startsWith('blob:') || src.startsWith('data:');
     const tryLoad = (withCORS: boolean) => {
       const img = new Image();
-      if (withCORS) (img as any).crossOrigin = 'anonymous';
+      if (withCORS && !isBlobOrData) (img as any).crossOrigin = 'anonymous';
       img.onload = () => resolve({ ...item, img });
       img.onerror = () => {
         if (withCORS) tryLoad(false);
