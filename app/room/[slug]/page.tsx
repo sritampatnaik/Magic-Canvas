@@ -34,8 +34,10 @@ export default function RoomPage() {
   const lastDetectTsRef = useRef<number>(0);
   const originalConsoleInfoRef = useRef<typeof console.info | null>(null);
   const originalConsoleLogRef = useRef<typeof console.log | null>(null);
+  const originalConsoleErrorRef = useRef<typeof console.error | null>(null);
   const gestureByKeyRef = useRef<Record<string, string>>({});
   const currentGestureEmojiRef = useRef<string | null>(null);
+  const toolByKeyRef = useRef<Record<string, { tool: 'cursor' | 'pen' | 'eraser'; color: string }>>({});
   const gestureMap: Record<string, string> = {
     Thumb_Up: "👍",
     Thumb_Down: "👎",
@@ -52,7 +54,7 @@ export default function RoomPage() {
   const currentStrokeRef = useRef<Stroke | null>(null);
   const draggingImageIdRef = useRef<string | null>(null);
   const dragOffsetRef = useRef<Point>({ x: 0, y: 0 });
-  const [tool, setTool] = useState<"cursor" | "pen" | "image">("cursor");
+  const [tool, setTool] = useState<"cursor" | "pen" | "image" | "eraser">("cursor");
   const activeStrokeIndexByIdRef = useRef<Record<string, number>>({});
   const [handAndGesturesEnabled, setHandAndGesturesEnabled] = useState(false);
 
@@ -140,11 +142,18 @@ export default function RoomPage() {
         if (!c) continue;
         const isIdle = now - c.t > 3000;
         ctx.globalAlpha = isIdle ? 0.55 : 1;
-        const emoji = gestureByKeyRef.current[id];
-        if (emoji) {
-          drawEmojiCursor(ctx, c.x, c.y, emoji);
+        const toolState = toolByKeyRef.current[id];
+        if (toolState?.tool === 'pen') {
+          drawPenCursor(ctx, c.x, c.y, toolState.color);
+        } else if (toolState?.tool === 'eraser') {
+          drawEraserCursor(ctx, c.x, c.y);
         } else {
-          drawCursor(ctx, c.x, c.y, meta);
+          const emoji = gestureByKeyRef.current[id];
+          if (emoji) {
+            drawEmojiCursor(ctx, c.x, c.y, emoji);
+          } else {
+            drawCursor(ctx, c.x, c.y, meta);
+          }
         }
       }
       ctx.globalAlpha = 1;
@@ -184,6 +193,33 @@ export default function RoomPage() {
       if (tool === "pen" && currentStrokeRef.current) {
         currentStrokeRef.current.points.push({ x, y });
         channel.send({ type: "broadcast", event: "stroke-append", payload: { id: currentStrokeRef.current.id, point: { x, y } } });
+      }
+      if (tool === "eraser") {
+        // erase by removing points within radius
+        const radius = 16;
+        const radiusSq = radius * radius;
+        let changed = false;
+        for (let i = 0; i < strokesRef.current.length; i++) {
+          const s = strokesRef.current[i];
+          const pts = s.points;
+          const filtered = [] as typeof pts;
+          for (let j = 0; j < pts.length; j++) {
+            const dx = pts[j].x - x;
+            const dy = pts[j].y - y;
+            if (dx * dx + dy * dy > radiusSq) filtered.push(pts[j]);
+          }
+          if (filtered.length !== pts.length) {
+            strokesRef.current[i] = { ...s, points: filtered };
+            changed = true;
+          }
+        }
+        if (changed) {
+          // broadcast full strokes snapshot (simple approach)
+          // Note: to keep protocol minimal, reuse 'stroke' event per stroke
+          for (const s of strokesRef.current) {
+            channel.send({ type: "broadcast", event: "stroke", payload: s });
+          }
+        }
       }
       if (tool === "cursor" && draggingImageIdRef.current) {
         const id = draggingImageIdRef.current;
@@ -277,6 +313,12 @@ export default function RoomPage() {
       const { key, emoji } = payload as { key: string; emoji: string };
       gestureByKeyRef.current[key] = emoji;
     });
+    channel.on("broadcast", { event: "tool" }, ({ payload }) => {
+      const { key, tool, color } = payload as { key: string; tool: 'cursor' | 'pen' | 'eraser'; color: string };
+      toolByKeyRef.current[key] = { tool, color };
+    });
+
+    // (RPS handlers removed)
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerdown", onDown);
@@ -316,6 +358,12 @@ export default function RoomPage() {
                 className={`px-3 py-2 rounded-md text-sm border ${tool === "pen" ? "bg-black text-white border-black" : "border-gray-200"}`}
               >
                 Pen
+              </button>
+              <button
+                onClick={() => setTool("eraser")}
+                className={`px-3 py-2 rounded-md text-sm border ${tool === "eraser" ? "bg-black text-white border-black" : "border-gray-200"}`}
+              >
+                Eraser
               </button>
               <button
                 onClick={() => onAddImage()}
@@ -363,6 +411,15 @@ export default function RoomPage() {
                         return originalConsoleLogRef.current?.apply(console, args as any);
                       };
                     }
+                    // also suppress console.error for the same noisy Mediapipe info line
+                    if (!originalConsoleErrorRef.current) {
+                      originalConsoleErrorRef.current = console.error;
+                      console.error = (...args: any[]) => {
+                        const first = args?.[0];
+                        if (typeof first === 'string' && first.includes('TensorFlow Lite XNNPACK delegate')) return;
+                        return originalConsoleErrorRef.current?.apply(console, args as any);
+                      };
+                    }
                     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
                     const video = videoRef.current!;
                     video.srcObject = stream;
@@ -402,7 +459,7 @@ export default function RoomPage() {
                           cursors.current[connId] = { x, y, t: ts };
                           channel.send({ type: "broadcast", event: "cursor", payload: { key: connId, x, y } });
                         }
-                        if (gesturesEnabledRef.current && gestureDetectorRef.current?.recognizeForVideo) {
+                        if (gestureDetectorRef.current?.recognizeForVideo) {
                           const gRes = gestureDetectorRef.current.recognizeForVideo(video, ts);
                           const top = gRes?.gestures?.[0]?.[0];
                           const name = top?.categoryName as string | undefined;
@@ -411,6 +468,18 @@ export default function RoomPage() {
                             currentGestureEmojiRef.current = emoji;
                             channel.send({ type: "broadcast", event: "gesture", payload: { key: connId, emoji } });
                             gestureByKeyRef.current[connId] = emoji;
+                          }
+                          // Gesture-to-tool mapping (broadcast tool state)
+                          if (!currentStrokeRef.current && name) {
+                            if (name === 'Pointing_Up' && tool !== 'pen') {
+                              setTool('pen');
+                              toolByKeyRef.current[connId] = { tool: 'pen', color };
+                              channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color } });
+                            } else if (name === 'Open_Palm' && tool !== 'eraser') {
+                              setTool('eraser');
+                              toolByKeyRef.current[connId] = { tool: 'eraser', color };
+                              channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color } });
+                            }
                           }
                         }
                       } catch {}
@@ -428,6 +497,7 @@ export default function RoomPage() {
                         if (ts <= lastDetectTsRef.current) ts = lastDetectTsRef.current + 1;
                         lastDetectTsRef.current = ts;
                         try {
+                          if (!detectorRef.current?.detectForVideo) { rvc(onFrame); return; }
                           const handsRes = detectorRef.current.detectForVideo(video, ts);
                           const tip = handsRes?.landmarks?.[0]?.[8];
                           if (tip) {
@@ -436,7 +506,7 @@ export default function RoomPage() {
                             cursors.current[connId] = { x, y, t: ts };
                             channel.send({ type: "broadcast", event: "cursor", payload: { key: connId, x, y } });
                           }
-                          if (gesturesEnabledRef.current && gestureDetectorRef.current?.recognizeForVideo) {
+                          if (gestureDetectorRef.current?.recognizeForVideo) {
                             const gRes = gestureDetectorRef.current.recognizeForVideo(video, ts);
                             const top = gRes?.gestures?.[0]?.[0];
                             const name = top?.categoryName as string | undefined;
@@ -445,6 +515,17 @@ export default function RoomPage() {
                               currentGestureEmojiRef.current = emoji;
                               channel.send({ type: "broadcast", event: "gesture", payload: { key: connId, emoji } });
                               gestureByKeyRef.current[connId] = emoji;
+                            }
+                            if (!currentStrokeRef.current && name) {
+                              if (name === 'Pointing_Up' && tool !== 'pen') {
+                                setTool('pen');
+                                toolByKeyRef.current[connId] = { tool: 'pen', color };
+                                channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color } });
+                              } else if (name === 'Open_Palm' && tool !== 'eraser') {
+                                setTool('eraser');
+                                toolByKeyRef.current[connId] = { tool: 'eraser', color };
+                                channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color } });
+                              }
                             }
                           }
                         } catch {}
@@ -467,6 +548,7 @@ export default function RoomPage() {
           </div>
         </div>
       </div>
+      {/* RPS overlay removed */}
     </main>
   );
 }
@@ -522,6 +604,36 @@ function drawEmojiCursor(ctx: CanvasRenderingContext2D, x: number, y: number, em
   ctx.shadowColor = "rgba(0,0,0,0.25)";
   ctx.shadowBlur = 6;
   ctx.fillText(emoji, x, y);
+  ctx.restore();
+}
+
+function drawPenCursor(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.25)';
+  ctx.shadowBlur = 6;
+  // draw a small pen tip diamond
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.lineTo(x + 7, y + 12);
+  ctx.lineTo(x, y + 18);
+  ctx.lineTo(x - 7, y + 12);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawEraserCursor(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.25)';
+  ctx.shadowBlur = 6;
+  ctx.strokeStyle = '#111827';
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  const r = 10;
+  ctx.beginPath();
+  ctx.arc(x, y + 10, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
   ctx.restore();
 }
 
