@@ -7,8 +7,7 @@ export const browserClient = () => {
 		throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY');
 	}
 	return createClient(url, anon, {
-		autoRefreshToken: true,
-		persistSession: false,
+		auth: { autoRefreshToken: true, persistSession: false },
 		realtime: { params: { eventsPerSecond: 40 } },
 	});
 };
