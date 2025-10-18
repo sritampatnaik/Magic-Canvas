@@ -2,6 +2,18 @@
 
 A keyboard-less and mouse-less multiplayer whiteboard that uses webcam gestures and voice control for a fully hands-free collaborative drawing experience.
 
+<div align="center">
+  <img src="https://supabase.com/brand-assets/supabase-logo-wordmark--light.svg" alt="Supabase" height="40"/>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="https://elevenlabs.io/brand/11labs_logo_black.svg" alt="ElevenLabs" height="40"/>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="https://fal.ai/logo.svg" alt="Fal.ai" height="40"/>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="public/gemini.png" alt="Google Gemini" height="40"/>
+</div>
+
+<br/>
+
 ## What I Built
 
 **Engelbart Canvas** is a real-time collaborative whiteboard that reimagines how we interact with digital canvases. Instead of using a keyboard and mouse, users control the canvas entirely through:
@@ -51,6 +63,10 @@ A keyboard-less and mouse-less multiplayer whiteboard that uses webcam gestures 
   - HandLandmarker for fingertip tracking
   - GestureRecognizer for detecting 9+ hand gestures
 - **ElevenLabs Conversational AI** (`@elevenlabs/client`) - Voice assistant with custom client tools
+  - **Tool Calling**: Custom client tools that execute in the browser
+  - `change_pen_color` - Parses natural language color names and updates pen color
+  - `change_brush_size` - Adjusts brush thickness based on voice commands
+  - `generate_image` - Triggers AI image generation with user-provided prompts
 - **Fal.ai** (`@fal-ai/client`) - Fast AI image generation
   - Model: `fal-ai/nano-banana/edit` for image-to-image generation
 
