@@ -438,16 +438,33 @@ export default function RoomPage() {
         const ny = last.y + (cur.y - last.y) * alpha;
         smoothed.current[id] = { x: nx, y: ny, t: now };
       }
-      for (const [id, meta] of Object.entries(peersRef.current)) {
-        const c = smoothed.current[id] || cursors.current[id];
-        if (!c) continue;
-        const isIdle = now - c.t > 3000;
-        ctx.globalAlpha = isIdle ? 0.55 : 1;
-        
-        // Always draw the default cursor triangle
-        const cursorColor = colorFromString(id);
-        ctx.save();
-        ctx.fillStyle = cursorColor;
+    for (const [id, meta] of Object.entries(peersRef.current)) {
+      const c = smoothed.current[id] || cursors.current[id];
+      if (!c) continue;
+      const isIdle = now - c.t > 3000;
+      ctx.globalAlpha = isIdle ? 0.55 : 1;
+      
+      // Get tool and gesture info
+      const toolInfo = toolByKeyRef.current[id];
+      const currentTool = toolInfo?.tool || 'cursor';
+      const brushColor = toolInfo?.color || colorFromString(id);
+      const gestureEmoji = gestureByKeyRef.current[id];
+      
+      ctx.save();
+      
+      // Draw cursor shape based on tool
+      if (currentTool === 'eraser') {
+        // Draw white circle for eraser (showing actual eraser size)
+        ctx.fillStyle = "#ffffff";
+        ctx.beginPath();
+        ctx.arc(c.x, c.y, 24, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = brushColor;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      } else {
+        // Draw triangle for pen/cursor, with brush color
+        ctx.fillStyle = brushColor;
         ctx.beginPath();
         ctx.moveTo(c.x, c.y);
         ctx.lineTo(c.x + 12, c.y + 4);
@@ -457,22 +474,36 @@ export default function RoomPage() {
         ctx.strokeStyle = "#fff";
         ctx.lineWidth = 1;
         ctx.stroke();
-        ctx.restore();
-        
-        // Draw username in pill
-        if (meta?.name) {
-          ctx.save();
-          ctx.font = "12px sans-serif";
-          const textWidth = ctx.measureText(meta.name).width;
-          const px = c.x + 14;
-          const py = c.y + 2;
-          ctx.fillStyle = cursorColor;
-          ctx.fillRect(px, py, textWidth + 8, 18);
-          ctx.fillStyle = "#fff";
-          ctx.fillText(meta.name, px + 4, py + 13);
-          ctx.restore();
-        }
       }
+      
+      ctx.restore();
+      
+      // Draw username and emoji in pill (always visible)
+      if (meta?.name) {
+        ctx.save();
+        ctx.font = "14px sans-serif";
+        
+        // Measure text with emoji if present
+        const displayText = gestureEmoji ? `${gestureEmoji} ${meta.name}` : meta.name;
+        const textWidth = ctx.measureText(displayText).width;
+        
+        const px = c.x + 14;
+        const py = c.y + 2;
+        const pillWidth = textWidth + 16;
+        const pillHeight = 24;
+        
+        // Draw pill background
+        ctx.fillStyle = brushColor;
+        ctx.beginPath();
+        ctx.roundRect(px, py, pillWidth, pillHeight, 12);
+        ctx.fill();
+        
+        // Draw text
+        ctx.fillStyle = "#fff";
+        ctx.fillText(displayText, px + 8, py + 17);
+        ctx.restore();
+      }
+    }
       ctx.globalAlpha = 1;
       requestAnimationFrame(draw);
     };

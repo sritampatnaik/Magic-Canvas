@@ -1,36 +1,112 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Engelbart Canvas
+
+A keyboard-less and mouse-less multiplayer whiteboard that uses webcam gestures and voice control for a fully hands-free collaborative drawing experience.
+
+## What I Built
+
+**Engelbart Canvas** is a real-time collaborative whiteboard that reimagines how we interact with digital canvases. Instead of using a keyboard and mouse, users control the canvas entirely through:
+
+- **Hand Gestures** (via webcam): Draw, erase, and select areas using natural hand movements detected by your webcam
+- **Voice Commands**: Change pen colors, adjust brush sizes, and generate AI images using conversational voice control
+- **AI Image Generation**: Select any area on the canvas and generate abstract artwork that seamlessly integrates into your drawing
+
+### Key Features
+
+1. **Real-time Multiplayer**: Multiple users can join a room and see each other's cursors, drawings, and gestures in real-time
+2. **Gesture Controls**:
+   - ☝️ **Pointing Up**: Activates pen tool and draws
+   - ✋ **Open Palm**: Activates eraser tool
+   - ✌️ **Victory**: Creates a selection area for AI generation
+   - 👍 **Thumbs Up**: Activates voice assistant
+   - 👎 **Thumbs Down**: Deactivates voice assistant
+3. **Voice Assistant**: Natural language control for:
+   - Changing pen colors ("make the pen blue")
+   - Adjusting brush size ("make the brush thicker")
+   - Generating images in selected areas ("create an abstract painting here")
+4. **Smart Cursors**: Each user's cursor dynamically shows:
+   - Their username and current gesture emoji
+   - Triangle cursor (colored by current pen color)
+   - Circle cursor (white, when eraser is active)
+5. **Freehand Drawing**: Smooth, real-time drawing with adjustable brush sizes and colors
+6. **AI Image Generation**: Select any canvas area and generate artwork using Fal.ai's image-to-image model
+
+## Technologies Used
+
+### Core Stack
+
+- **Next.js 14** (App Router) - React framework for the web application
+- **TypeScript** - Type-safe development
+- **Tailwind CSS** - Utility-first styling
+
+### Real-time Collaboration
+
+- **Supabase Realtime** - WebSocket-based real-time presence and broadcasts
+  - Presence API for multi-cursor tracking
+  - Broadcasts for drawing strokes, gestures, and tool changes
+- **Supabase Storage** - Image hosting for AI-generated artwork
+
+### AI & ML Services
+
+- **Google MediaPipe** (`@mediapipe/tasks-vision`) - Hand gesture recognition
+  - HandLandmarker for fingertip tracking
+  - GestureRecognizer for detecting 9+ hand gestures
+- **ElevenLabs Conversational AI** (`@elevenlabs/client`) - Voice assistant with custom client tools
+- **Fal.ai** (`@fal-ai/client`) - Fast AI image generation
+  - Model: `fal-ai/nano-banana/edit` for image-to-image generation
+
+### Graphics & Rendering
+
+- **HTML Canvas API** - High-performance 2D drawing with:
+  - Real-time stroke rendering
+  - Compositing operations for eraser functionality
+  - DPR-aware scaling for crisp visuals
+
+## How It Works
+
+1. **Create a Room**: Users create a shareable room with a unique URL
+2. **Join with Avatar**: Select an avatar and name to enter the room
+3. **Enable Magic Mode**: Activate hand gesture and voice control
+4. **Draw & Collaborate**:
+   - Use hand gestures to draw and erase
+   - Voice commands to customize colors and brush size
+   - Select areas with the Victory gesture to generate AI artwork
+5. **Real-time Sync**: All actions are broadcast to other users in the room via Supabase Realtime
 
 ## Getting Started
 
-First, run the development server:
+1. Clone the repository
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Set up environment variables in `.env.local`:
+   ```
+   NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+   SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+   FAL_KEY=your_fal_api_key
+   ELEVENLABS_API_KEY=your_elevenlabs_api_key
+   ELEVENLABS_AGENT_ID=your_elevenlabs_agent_id
+   ```
+4. Run the development server:
+   ```bash
+   npm run dev
+   ```
+5. Open [http://localhost:3000](http://localhost:3000)
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Technical Highlights
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **Optimized Real-time Performance**: Throttled cursor movements and debounced gesture detection for smooth 60fps rendering
+- **DPR-Aware Canvas**: High-resolution rendering that adapts to device pixel ratios
+- **Streaming Strokes**: In-progress drawing strokes are streamed to peers in real-time, not just on completion
+- **Client-Side MediaPipe**: Webcam processing happens entirely in the browser for privacy and low latency
+- **Voice Tool Integration**: ElevenLabs client tools with custom handlers for pen color, brush size, and AI generation
+- **Mirrored Fingertip Coordinates**: Natural left/right movement with front-facing cameras
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Demo
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Try it live or watch the demo video to see gesture-controlled collaborative drawing in action!
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Built with ❤️ using Supabase, ElevenLabs, Fal.ai, and Google Gemini
