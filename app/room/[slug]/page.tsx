@@ -10,7 +10,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 type PeerMeta = { name: string; avatar: string; color: string };
 type Cursor = { x: number; y: number; t: number };
 type Point = { x: number; y: number };
-type Stroke = { id: string; points: Point[]; color: string; width: number; userId: string };
+type Stroke = { id: string; points: Point[]; color: string; width: number; userId: string; mode?: 'draw' | 'erase' };
 type ImageItem = { id: string; url: string; x: number; y: number; w: number; h: number; img?: HTMLImageElement };
 
 export default function RoomPage() {
@@ -38,6 +38,8 @@ export default function RoomPage() {
   const gestureByKeyRef = useRef<Record<string, string>>({});
   const currentGestureEmojiRef = useRef<string | null>(null);
   const toolByKeyRef = useRef<Record<string, { tool: 'cursor' | 'pen' | 'eraser'; color: string }>>({});
+  const gestureDrawingRef = useRef<boolean>(false);
+  const gestureStrokeActiveRef = useRef<boolean>(false);
   const gestureMap: Record<string, string> = {
     Thumb_Up: "👍",
     Thumb_Down: "👎",
@@ -69,6 +71,31 @@ export default function RoomPage() {
       channelRef.current?.send({ type: "broadcast", event: "image-add", payload: item });
     } catch {}
   };
+
+  function eraseAtPoint(x: number, y: number) {
+    const radius = 16;
+    const radiusSq = radius * radius;
+    let changed = false;
+    for (let i = 0; i < strokesRef.current.length; i++) {
+      const s = strokesRef.current[i];
+      const pts = s.points;
+      const filtered = [] as typeof pts;
+      for (let j = 0; j < pts.length; j++) {
+        const dx = pts[j].x - x;
+        const dy = pts[j].y - y;
+        if (dx * dx + dy * dy > radiusSq) filtered.push(pts[j]);
+      }
+      if (filtered.length !== pts.length) {
+        strokesRef.current[i] = { ...s, points: filtered };
+        changed = true;
+      }
+    }
+    if (changed && channelRef.current) {
+      for (const s of strokesRef.current) {
+        channelRef.current.send({ type: 'broadcast', event: 'stroke', payload: s });
+      }
+    }
+  }
 
   useEffect(() => {
     try { setShareUrl(`${window.location.origin}/room/${slug}/join`); } catch {}
@@ -116,18 +143,27 @@ export default function RoomPage() {
       for (const item of imagesRef.current) {
         if (item.img && item.img.complete) ctx.drawImage(item.img, item.x, item.y, item.w, item.h);
       }
-      // strokes over
+      // strokes over: render draw/erase using compositing
+      ctx.save();
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
       for (const s of strokesRef.current) {
         if (s.points.length < 2) continue;
-        ctx.strokeStyle = s.color;
-        ctx.lineWidth = s.width;
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
+        if (s.mode === 'erase') {
+          ctx.globalCompositeOperation = 'destination-out';
+          ctx.strokeStyle = 'rgba(0,0,0,1)';
+          ctx.lineWidth = s.width;
+        } else {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = s.width;
+        }
         ctx.beginPath();
         ctx.moveTo(s.points[0].x, s.points[0].y);
         for (let i = 1; i < s.points.length; i++) ctx.lineTo(s.points[i].x, s.points[i].y);
         ctx.stroke();
       }
+      ctx.restore();
       // cursors
       const now = performance.now();
       for (const [id, cur] of Object.entries(cursors.current)) {
@@ -194,32 +230,9 @@ export default function RoomPage() {
         currentStrokeRef.current.points.push({ x, y });
         channel.send({ type: "broadcast", event: "stroke-append", payload: { id: currentStrokeRef.current.id, point: { x, y } } });
       }
-      if (tool === "eraser") {
-        // erase by removing points within radius
-        const radius = 16;
-        const radiusSq = radius * radius;
-        let changed = false;
-        for (let i = 0; i < strokesRef.current.length; i++) {
-          const s = strokesRef.current[i];
-          const pts = s.points;
-          const filtered = [] as typeof pts;
-          for (let j = 0; j < pts.length; j++) {
-            const dx = pts[j].x - x;
-            const dy = pts[j].y - y;
-            if (dx * dx + dy * dy > radiusSq) filtered.push(pts[j]);
-          }
-          if (filtered.length !== pts.length) {
-            strokesRef.current[i] = { ...s, points: filtered };
-            changed = true;
-          }
-        }
-        if (changed) {
-          // broadcast full strokes snapshot (simple approach)
-          // Note: to keep protocol minimal, reuse 'stroke' event per stroke
-          for (const s of strokesRef.current) {
-            channel.send({ type: "broadcast", event: "stroke", payload: s });
-          }
-        }
+      if (tool === "eraser" && currentStrokeRef.current && currentStrokeRef.current.mode === 'erase') {
+        currentStrokeRef.current.points.push({ x, y });
+        channel.send({ type: 'broadcast', event: 'stroke-append', payload: { id: currentStrokeRef.current.id, point: { x, y } } });
       }
       if (tool === "cursor" && draggingImageIdRef.current) {
         const id = draggingImageIdRef.current;
@@ -241,6 +254,11 @@ export default function RoomPage() {
         const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color, width: 3, userId: self.id };
         currentStrokeRef.current = stroke;
         strokesRef.current = [...strokesRef.current, stroke];
+      } else if (tool === "eraser") {
+        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color: '#000', width: 48, userId: self.id, mode: 'erase' };
+        currentStrokeRef.current = stroke;
+        strokesRef.current = [...strokesRef.current, stroke];
+        channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
       } else if (tool === "cursor") {
         for (let i = imagesRef.current.length - 1; i >= 0; i--) {
           const it = imagesRef.current[i];
@@ -254,7 +272,7 @@ export default function RoomPage() {
     };
 
     const onUp = () => {
-      if (tool === "pen" && currentStrokeRef.current) {
+      if ((tool === "pen" || tool === 'eraser') && currentStrokeRef.current) {
         channel.send({ type: "broadcast", event: "stroke-end", payload: { id: currentStrokeRef.current.id } });
         currentStrokeRef.current = null;
       }
@@ -348,19 +366,31 @@ export default function RoomPage() {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setTool("cursor")}
+                onClick={() => {
+                  setTool("cursor");
+                  toolByKeyRef.current[connId] = { tool: 'cursor', color };
+                  channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'cursor', color } });
+                }}
                 className={`px-3 py-2 rounded-md text-sm border ${tool === "cursor" ? "bg-black text-white border-black" : "border-gray-200"}`}
               >
                 Select
               </button>
               <button
-                onClick={() => setTool("pen")}
+                onClick={() => {
+                  setTool("pen");
+                  toolByKeyRef.current[connId] = { tool: 'pen', color };
+                  channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color } });
+                }}
                 className={`px-3 py-2 rounded-md text-sm border ${tool === "pen" ? "bg-black text-white border-black" : "border-gray-200"}`}
               >
                 Pen
               </button>
               <button
-                onClick={() => setTool("eraser")}
+                onClick={() => {
+                  setTool("eraser");
+                  toolByKeyRef.current[connId] = { tool: 'eraser', color };
+                  channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color } });
+                }}
                 className={`px-3 py-2 rounded-md text-sm border ${tool === "eraser" ? "bg-black text-white border-black" : "border-gray-200"}`}
               >
                 Eraser
@@ -481,6 +511,44 @@ export default function RoomPage() {
                               channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color } });
                             }
                           }
+
+                          // Hand-driven drawing/erasing
+                          if (tip && name === 'Pointing_Up') {
+                            const hx = (1 - tip.x) * rect.width;
+                            const hy = tip.y * rect.height;
+                            if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
+                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color, width: 3, userId: self.id };
+                              currentStrokeRef.current = stroke;
+                              strokesRef.current = [...strokesRef.current, stroke];
+                              channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
+                              gestureStrokeActiveRef.current = true;
+                            } else if (currentStrokeRef.current) {
+                              currentStrokeRef.current.points.push({ x: hx, y: hy });
+                              channel.send({ type: 'broadcast', event: 'stroke-append', payload: { id: currentStrokeRef.current.id, point: { x: hx, y: hy } } });
+                            }
+                          } else if (gestureStrokeActiveRef.current && currentStrokeRef.current) {
+                            channel.send({ type: 'broadcast', event: 'stroke-end', payload: { id: currentStrokeRef.current.id } });
+                            currentStrokeRef.current = null;
+                            gestureStrokeActiveRef.current = false;
+                          }
+
+                          if (tip && name === 'Open_Palm') {
+                            const hx = (1 - tip.x) * rect.width;
+                            const hy = tip.y * rect.height;
+                            // gesture-based erase stroke (destination-out)
+                            if (!currentStrokeRef.current || currentStrokeRef.current.mode !== 'erase') {
+                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: '#000', width: 48, userId: self.id, mode: 'erase' };
+                              currentStrokeRef.current = stroke;
+                              strokesRef.current = [...strokesRef.current, stroke];
+                              channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
+                            } else {
+                              currentStrokeRef.current.points.push({ x: hx, y: hy });
+                              channel.send({ type: 'broadcast', event: 'stroke-append', payload: { id: currentStrokeRef.current.id, point: { x: hx, y: hy } } });
+                            }
+                          } else if (currentStrokeRef.current && currentStrokeRef.current.mode === 'erase') {
+                            channel.send({ type: 'broadcast', event: 'stroke-end', payload: { id: currentStrokeRef.current.id } });
+                            currentStrokeRef.current = null;
+                          }
                         }
                       } catch {}
                       requestAnimationFrame(rafLoop);
@@ -526,6 +594,42 @@ export default function RoomPage() {
                                 toolByKeyRef.current[connId] = { tool: 'eraser', color };
                                 channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color } });
                               }
+                            }
+
+                            if (tip && name === 'Pointing_Up') {
+                              const hx = (1 - tip.x) * rect.width;
+                              const hy = tip.y * rect.height;
+                              if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
+                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color, width: 3, userId: self.id };
+                                currentStrokeRef.current = stroke;
+                                strokesRef.current = [...strokesRef.current, stroke];
+                                channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
+                                gestureStrokeActiveRef.current = true;
+                              } else if (currentStrokeRef.current) {
+                                currentStrokeRef.current.points.push({ x: hx, y: hy });
+                                channel.send({ type: 'broadcast', event: 'stroke-append', payload: { id: currentStrokeRef.current.id, point: { x: hx, y: hy } } });
+                              }
+                            } else if (gestureStrokeActiveRef.current && currentStrokeRef.current) {
+                              channel.send({ type: 'broadcast', event: 'stroke-end', payload: { id: currentStrokeRef.current.id } });
+                              currentStrokeRef.current = null;
+                              gestureStrokeActiveRef.current = false;
+                            }
+
+                            if (tip && name === 'Open_Palm') {
+                              const hx = (1 - tip.x) * rect.width;
+                              const hy = tip.y * rect.height;
+                              if (!currentStrokeRef.current || currentStrokeRef.current.mode !== 'erase') {
+                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: '#000', width: 48, userId: self.id, mode: 'erase' };
+                                currentStrokeRef.current = stroke;
+                                strokesRef.current = [...strokesRef.current, stroke];
+                                channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
+                              } else {
+                                currentStrokeRef.current.points.push({ x: hx, y: hy });
+                                channel.send({ type: 'broadcast', event: 'stroke-append', payload: { id: currentStrokeRef.current.id, point: { x: hx, y: hy } } });
+                              }
+                            } else if (currentStrokeRef.current && currentStrokeRef.current.mode === 'erase') {
+                              channel.send({ type: 'broadcast', event: 'stroke-end', payload: { id: currentStrokeRef.current.id } });
+                              currentStrokeRef.current = null;
                             }
                           }
                         } catch {}
@@ -629,7 +733,7 @@ function drawEraserCursor(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.shadowBlur = 6;
   ctx.strokeStyle = '#111827';
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  const r = 10;
+  const r = 24;
   ctx.beginPath();
   ctx.arc(x, y + 10, r, 0, Math.PI * 2);
   ctx.fill();
