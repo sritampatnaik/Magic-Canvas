@@ -84,8 +84,7 @@ export default function RoomPage() {
   // Color name to hex mapping
   const parseColorName = (colorName: string | undefined): string => {
     const currentColor = toolByKeyRef.current[connId]?.color || color;
-    console.log('[parseColorName] Input:', colorName, 'Current color:', currentColor, 'connId:', connId);
-    if (!colorName) return currentColor; // Return current color if no color name provided
+    if (!colorName) return currentColor;
     
     const colorMap: Record<string, string> = {
       red: '#ef4444', darkred: '#b91c1c', lightred: '#fca5a5',
@@ -99,9 +98,7 @@ export default function RoomPage() {
       brown: '#92400e', cyan: '#06b6d4', teal: '#14b8a6',
     };
     const normalized = colorName.toLowerCase().replace(/[\s-]/g, '');
-    const result = colorMap[normalized] || currentColor;
-    console.log('[parseColorName] Normalized:', normalized, 'Result:', result);
-    return result;
+    return colorMap[normalized] || currentColor;
   };
 
   const onAddImage = async () => {
@@ -137,48 +134,32 @@ export default function RoomPage() {
         return;
       }
 
+      console.log('[ElevenLabs] Starting conversation with signed URL');
+      
       const conversation = await Conversation.startSession({
         signedUrl,
         clientTools: {
           change_pen_color: async (params: any) => {
-            console.log('[ElevenLabs] change_pen_color called with params:', params);
-            console.log('[ElevenLabs] params type:', typeof params);
-            console.log('[ElevenLabs] params keys:', Object.keys(params));
-            console.log('[ElevenLabs] Current connId:', connId);
-            console.log('[ElevenLabs] Before change - toolByKeyRef:', JSON.stringify(toolByKeyRef.current));
-            
-            // Try multiple ways to extract color
             const colorName = params?.color || params?.name || params?.colour || (typeof params === 'string' ? params : null);
             
-            console.log('[ElevenLabs] Extracted colorName:', colorName);
-            
             if (!colorName) {
-              console.log('[ElevenLabs] No color provided - returning error');
               return 'I need you to specify which color you want. For example, say "change to red" or "make it blue".';
             }
             
             const newColor = parseColorName(colorName);
-            console.log('[ElevenLabs] Parsed color:', colorName, '->', newColor);
             setTool('pen');
             toolByKeyRef.current[connId] = { tool: 'pen', color: newColor };
-            console.log('[ElevenLabs] After change - toolByKeyRef:', JSON.stringify(toolByKeyRef.current));
             channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color: newColor } });
             return `Pen color changed to ${colorName}. Draw to see your new color!`;
           },
           change_brush_size: async (params: any) => {
-            console.log('[ElevenLabs] change_brush_size called with params:', params);
-            console.log('[ElevenLabs] Current brush width:', brushWidthRef.current);
-            
-            // Try multiple ways to extract size/thickness
             let size = params?.size || params?.thickness || params?.width;
             
-            // Handle relative terms
             if (params?.action === 'increase' || params?.increase === true) {
               size = Math.min(brushWidthRef.current + 3, 20);
             } else if (params?.action === 'decrease' || params?.decrease === true) {
               size = Math.max(brushWidthRef.current - 3, 1);
             } else if (typeof params === 'string') {
-              // Handle strings like "thicker", "thinner", "5", etc.
               const lower = params.toLowerCase();
               if (lower.includes('thick') || lower.includes('big') || lower.includes('large') || lower.includes('increase')) {
                 size = Math.min(brushWidthRef.current + 3, 20);
@@ -190,41 +171,50 @@ export default function RoomPage() {
               }
             }
             
-            // Convert string numbers to actual numbers
             if (typeof size === 'string') {
               const parsed = parseInt(size);
               if (!isNaN(parsed)) size = parsed;
             }
             
-            // Validate size is a number
             if (typeof size !== 'number' || isNaN(size)) {
               return 'Please specify a brush size between 1 and 20, or say "make it thicker" or "make it thinner".';
             }
             
-            // Clamp between 1 and 20
             const newSize = Math.max(1, Math.min(20, size));
             brushWidthRef.current = newSize;
             setBrushWidth(newSize);
-            console.log('[ElevenLabs] Brush size changed to:', newSize);
             
             if (newSize <= 3) return `Brush is now thin (size ${newSize})`;
             else if (newSize <= 8) return `Brush is now medium (size ${newSize})`;
             else return `Brush is now thick (size ${newSize})`;
           },
           generate_image: async (params: any) => {
-            console.log('[ElevenLabs] generate_image called with params:', params);
+            console.log('═══════════════════════════════════════');
+            console.log('[🎨 IMAGE GEN] 🚀 TOOL INVOKED!');
+            console.log('[🎨 IMAGE GEN] Tool called with params:', params);
+            
             const prompt = params?.prompt;
             if (!prompt) {
+              console.log('[🎨 IMAGE GEN] ❌ No prompt provided');
               return 'Please specify what you want to generate';
             }
+            console.log('[🎨 IMAGE GEN] ✓ Prompt:', prompt);
+            
             if (!selectionRectRef.current) {
+              console.log('[🎨 IMAGE GEN] ❌ No selection area');
               return 'Please select an area on the canvas first using the Victory gesture or Select Area tool';
             }
+            console.log('[🎨 IMAGE GEN] ✓ Selection rect:', selectionRectRef.current);
             
             try {
               const rect = selectionRectRef.current;
               const canvas = canvasRef.current!;
+              console.log('[🎨 IMAGE GEN] Canvas size:', canvas.width, 'x', canvas.height);
+              
               const dpr = Math.max(1, window.devicePixelRatio || 1);
+              console.log('[🎨 IMAGE GEN] DPR:', dpr);
+              
+              // Crop selected area
               const src = document.createElement('canvas');
               const sctx = src.getContext('2d')!;
               const sw = Math.max(1, Math.floor(rect.w * dpr));
@@ -234,6 +224,9 @@ export default function RoomPage() {
               sctx.fillStyle = '#ffffff';
               sctx.fillRect(0, 0, sw, sh);
               sctx.drawImage(canvas, Math.floor(rect.x * dpr), Math.floor(rect.y * dpr), sw, sh, 0, 0, sw, sh);
+              console.log('[🎨 IMAGE GEN] Cropped size:', sw, 'x', sh);
+              
+              // Resize to 512x512
               const sized = document.createElement('canvas');
               const szctx = sized.getContext('2d')!;
               sized.width = 512; sized.height = 512;
@@ -241,17 +234,25 @@ export default function RoomPage() {
               szctx.imageSmoothingQuality = 'high';
               szctx.drawImage(src, 0, 0, sized.width, sized.height);
               const dataUrl = sized.toDataURL('image/png');
+              console.log('[🎨 IMAGE GEN] ✓ Image prepared, calling Fal.ai...');
               
               setGenerating(true);
+              
+              const fullPrompt = `Using the selected child-like sketch as reference, ${prompt}. Preserve the composition; amplify shapes and rhythm; use vibrant colors; painterly style; high quality.`;
+              console.log('[🎨 IMAGE GEN] Full prompt:', fullPrompt);
+              
               type FalGenResult = { data?: { images?: Array<{ url: string }> }; images?: Array<{ url: string }> };
               const result = await fal.subscribe('fal-ai/nano-banana/edit', {
-                input: { prompt: prompt || 'abstract painting', image_urls: [dataUrl], sync_mode: true } as any,
+                input: { prompt: fullPrompt, image_urls: [dataUrl], sync_mode: true } as any,
                 pollInterval: 1500,
                 logs: false,
               }) as FalGenResult;
               
+              console.log('[🎨 IMAGE GEN] Fal.ai result:', result);
+              
               const url = result?.data?.images?.[0]?.url || result?.images?.[0]?.url;
               if (url) {
+                console.log('[🎨 IMAGE GEN] ✓ Image URL:', url);
                 const item: ImageItem = { id: crypto.randomUUID(), url, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
                 const loaded = await loadImageItem(item);
                 imagesRef.current = [...imagesRef.current, loaded];
@@ -260,33 +261,38 @@ export default function RoomPage() {
                 selectionRectRef.current = null;
                 setShowGenerate(false);
                 setGenerating(false);
-                return 'Image generated successfully';
+                console.log('[🎨 IMAGE GEN] ✅ Complete!');
+                return 'Image generated successfully! It should appear on the canvas now.';
               }
+              
+              console.log('[🎨 IMAGE GEN] ❌ No URL in result');
               setGenerating(false);
-              return 'Failed to generate image';
+              return 'Failed to generate image - no URL returned';
             } catch (error: any) {
+              console.error('[🎨 IMAGE GEN] ❌ Error:', error);
               setGenerating(false);
-              return error.message || 'Error generating image';
+              return `Error generating image: ${error.message || 'Unknown error'}`;
             }
           }
         },
         onConnect: () => {
-          console.log('[ElevenLabs] Connected');
+          console.log('[ElevenLabs] ✅ Connected');
+          console.log('[ElevenLabs] 🔧 Tools available:', ['change_pen_color', 'change_brush_size', 'generate_image']);
           elevenLabsEnabledRef.current = true;
           elevenLabsInitializingRef.current = false;
           setElevenLabsActive(true);
         },
         onDisconnect: () => {
-          console.log('[ElevenLabs] Disconnected');
+          console.log('[ElevenLabs] ❌ Disconnected');
           elevenLabsEnabledRef.current = false;
           elevenLabsInitializingRef.current = false;
           setElevenLabsActive(false);
         },
         onError: (error) => {
-          console.error('[ElevenLabs] Error:', error);
+          console.error('[ElevenLabs] ⚠️ Error:', error);
         },
         onModeChange: (mode) => {
-          console.log('[ElevenLabs] Mode changed:', mode);
+          console.log('[ElevenLabs] 🎤 Mode:', mode);
         },
       });
 
@@ -524,7 +530,6 @@ export default function RoomPage() {
       if (tool === "pen") {
         const currentColor = toolByKeyRef.current[connId]?.color || color;
         const currentWidth = brushWidthRef.current;
-        console.log('[onDown] Creating pen stroke - connId:', connId, 'currentColor:', currentColor, 'brushWidth:', currentWidth, 'toolByKeyRef:', JSON.stringify(toolByKeyRef.current[connId]));
         const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color: currentColor, width: currentWidth, userId: self?.id || connId };
         currentStrokeRef.current = stroke;
         strokesRef.current = [...strokesRef.current, stroke];
@@ -926,7 +931,6 @@ export default function RoomPage() {
                             if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
                               const currentColor = toolByKeyRef.current[connId]?.color || color;
                               const currentWidth = brushWidthRef.current;
-                              console.log('[Gesture Pointing_Up] Creating stroke - connId:', connId, 'currentColor:', currentColor, 'brushWidth:', currentWidth, 'toolByKeyRef:', JSON.stringify(toolByKeyRef.current[connId]));
                               const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: currentColor, width: currentWidth, userId: self?.id || connId };
                               currentStrokeRef.current = stroke;
                               strokesRef.current = [...strokesRef.current, stroke];
