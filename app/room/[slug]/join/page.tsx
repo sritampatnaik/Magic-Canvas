@@ -27,7 +27,7 @@ export default function JoinPage() {
     try {
       setShareUrl(`${window.location.origin}/room/${slug}/join`);
     } catch {}
-  }, []);
+  }, [slug]);
 
   return (
     <main className="min-h-screen max-w-xl mx-auto p-8">

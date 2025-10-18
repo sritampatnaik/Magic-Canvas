@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { browserClient } from "@/lib/supabase/client";
 import ShareLink from "@/components/ShareLink";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 
 type PeerMeta = { name: string; avatar: string; color: string };
 type Cursor = { x: number; y: number; t: number };
@@ -16,29 +17,13 @@ export default function RoomPage() {
   const router = useRouter();
   const slug = params.slug;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [peers, setPeers] = useState<Record<string, PeerMeta>>({});
   const peersRef = useRef<Record<string, PeerMeta>>({});
   const cursors = useRef<Record<string, Cursor>>({});
   const smoothed = useRef<Record<string, Cursor>>({});
   const [self, setSelf] = useState<{ id: string; name: string; avatar: string } | null>(null);
   const [connId, setConnId] = useState<string>("");
   const [shareUrl, setShareUrl] = useState<string>("");
-  // Supabase Realtime channel ref (typed to the minimal surface we use)
-  type BroadcastPayload = { event: string; payload: unknown };
-  type PresenceMeta = PeerMeta;
-  interface RealtimeChannelLike {
-    on: (
-      type: "broadcast" | "presence",
-      filter: { event: string },
-      cb: (evt: { payload: unknown }) => void
-    ) => RealtimeChannelLike;
-    subscribe: (cb: (status: string) => void | Promise<void>) => void;
-    send: (msg: { type: "broadcast"; event: string; payload: unknown }) => void;
-    track: (meta: PresenceMeta) => Promise<void> | void;
-    presenceState: () => Record<string, Array<PresenceMeta>>;
-    unsubscribe: () => void;
-  }
-  const channelRef = useRef<RealtimeChannelLike | null>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
   const strokesRef = useRef<Stroke[]>([]);
   const imagesRef = useRef<ImageItem[]>([]);
   const currentStrokeRef = useRef<Stroke | null>(null);
@@ -133,7 +118,6 @@ export default function RoomPage() {
         if (meta) next[id] = meta;
       }
       peersRef.current = next;
-      setPeers(next);
     });
 
     channel.on("broadcast", { event: "cursor" }, ({ payload }) => {
