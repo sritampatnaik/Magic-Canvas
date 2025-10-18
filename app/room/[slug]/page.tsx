@@ -8,6 +8,7 @@ import { fal } from "@fal-ai/client";
 import { createHandDetector, createGestureRecognizer } from "@/lib/hand/mediapipe";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { Conversation } from "@elevenlabs/client";
+import { Hand, Mic } from "lucide-react";
 
 type PeerMeta = { name: string; avatar: string; color: string };
 type Cursor = { x: number; y: number; t: number };
@@ -442,19 +443,34 @@ export default function RoomPage() {
         if (!c) continue;
         const isIdle = now - c.t > 3000;
         ctx.globalAlpha = isIdle ? 0.55 : 1;
-        const toolState = toolByKeyRef.current[id];
-        if (toolState?.tool === 'pen') {
-          drawPenCursor(ctx, c.x, c.y, toolState.color);
-        } else if (toolState?.tool === 'eraser') {
-          drawEraserCursor(ctx, c.x, c.y);
-        } else {
-          const emoji = gestureByKeyRef.current[id];
-          if (emoji) {
-            drawEmojiCursor(ctx, c.x, c.y, emoji);
-          } else {
-            // No gesture detected: show a disabled icon
-            drawDisabledCursor(ctx, c.x, c.y);
-          }
+        
+        // Always draw the default cursor triangle
+        const cursorColor = colorFromString(id);
+        ctx.save();
+        ctx.fillStyle = cursorColor;
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(c.x + 12, c.y + 4);
+        ctx.lineTo(c.x + 6, c.y + 12);
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
+        
+        // Draw username in pill
+        if (meta?.name) {
+          ctx.save();
+          ctx.font = "12px sans-serif";
+          const textWidth = ctx.measureText(meta.name).width;
+          const px = c.x + 14;
+          const py = c.y + 2;
+          ctx.fillStyle = cursorColor;
+          ctx.fillRect(px, py, textWidth + 8, 18);
+          ctx.fillStyle = "#fff";
+          ctx.fillText(meta.name, px + 4, py + 13);
+          ctx.restore();
         }
       }
       ctx.globalAlpha = 1;
@@ -754,44 +770,6 @@ export default function RoomPage() {
               <ShareLink url={shareUrl} />
             </div>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  setTool("cursor");
-                  toolByKeyRef.current[connId] = { tool: 'cursor', color };
-                  channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'cursor', color } });
-                }}
-                className={`px-3 py-2 rounded-md text-sm border ${tool === "cursor" ? "bg-black text-white border-black" : "border-gray-200"}`}
-              >
-                Select
-              </button>
-              <button
-                onClick={() => {
-                  setTool("pen");
-                  toolByKeyRef.current[connId] = { tool: 'pen', color };
-                  channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color } });
-                }}
-                className={`px-3 py-2 rounded-md text-sm border ${tool === "pen" ? "bg-black text-white border-black" : "border-gray-200"}`}
-              >
-                Pen
-              </button>
-              <button
-                onClick={() => {
-                  setTool("eraser");
-                  toolByKeyRef.current[connId] = { tool: 'eraser', color };
-                  channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color } });
-                }}
-                className={`px-3 py-2 rounded-md text-sm border ${tool === "eraser" ? "bg-black text-white border-black" : "border-gray-200"}`}
-              >
-                Eraser
-              </button>
-              <button
-                onClick={() => {
-                  setTool("select");
-                }}
-                className={`px-3 py-2 rounded-md text-sm border ${tool === "select" ? "bg-black text-white border-black" : "border-gray-200"}`}
-              >
-                Select Area
-              </button>
               <button
                 onClick={async () => {
                   // Unified toggle: both Hand + Gestures
@@ -1129,17 +1107,18 @@ export default function RoomPage() {
                     handEnabledRef.current = false;
                   }
                 }}
-                className={`px-3 py-2 rounded-md text-sm border ${handAndGesturesEnabled ? 'bg-black text-white border-black' : 'border-gray-200'}`}
+                className={`p-2.5 rounded-md text-sm border flex items-center justify-center ${handAndGesturesEnabled ? 'bg-black text-white border-black' : 'border-gray-200'}`}
+                title="Magic Mode (Hand Gestures)"
               >
-                Magic Mode
+                <Hand className="w-5 h-5 mr-2" /> Magic Mode
               </button>
               {elevenLabsActive && (
-                <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-red-50 border border-red-200">
-                  <svg className="w-3.5 h-3.5 text-red-600" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M7 4a3 3 0 016 0v6a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" />
-                  </svg>
-                  <span className="text-xs font-medium text-red-700">Voice Active</span>
-                </div>
+                <button
+                  className="p-2.5 rounded-md border border-red-300 bg-red-50 flex items-center justify-center"
+                  title="Voice Active"
+                >
+                  <Mic className="w-5 h-5 text-red-600 animate-pulse" />
+                </button>
               )}
             </div>
           </div>
