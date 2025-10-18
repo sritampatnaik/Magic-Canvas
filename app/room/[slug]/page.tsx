@@ -31,6 +31,18 @@ export default function RoomPage() {
   const dragOffsetRef = useRef<Point>({ x: 0, y: 0 });
   const [tool, setTool] = useState<"cursor" | "pen" | "image">("cursor");
 
+  const onAddImage = async () => {
+    try {
+      const url = window.prompt("Paste a public image URL");
+      if (!url) return;
+      const item: ImageItem = { id: crypto.randomUUID(), url, x: 100, y: 100, w: 320, h: 180 };
+      loadImageItem(item).then((loaded) => {
+        imagesRef.current = [...imagesRef.current, loaded];
+      });
+      channelRef.current?.send({ type: "broadcast", event: "image-add", payload: item });
+    } catch {}
+  };
+
   useEffect(() => {
     try { setShareUrl(`${window.location.origin}/room/${slug}/join`); } catch {}
     // create a stable per-tab connection id, used as presence key and cursor map key
@@ -222,7 +234,7 @@ export default function RoomPage() {
   return (
     <main className="min-h-screen">
       <div className="fixed inset-0">
-        <canvas ref={canvasRef} className="w-full h-full block" />
+        <canvas ref={canvasRef} className="w-full h-full block cursor-none" />
       </div>
       <div className="fixed top-3 left-1/2 -translate-x-1/2 z-10 w-[min(720px,92vw)]">
         <div className="rounded-xl border border-gray-200 bg-white/90 backdrop-blur px-4 py-2 shadow-sm">
