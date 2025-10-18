@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { browserClient } from "@/lib/supabase/client";
 import ShareLink from "@/components/ShareLink";
+import { createHandDetector, createGestureRecognizer } from "@/lib/hand/mediapipe";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 type PeerMeta = { name: string; avatar: string; color: string };
@@ -24,6 +25,28 @@ export default function RoomPage() {
   const [connId, setConnId] = useState<string>("");
   const [shareUrl, setShareUrl] = useState<string>("");
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const handEnabledRef = useRef<boolean>(false);
+  const gesturesEnabledRef = useRef<boolean>(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const detectorRef = useRef<any>(null);
+  const gestureDetectorRef = useRef<any>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const lastDetectTsRef = useRef<number>(0);
+  const originalConsoleInfoRef = useRef<typeof console.info | null>(null);
+  const originalConsoleLogRef = useRef<typeof console.log | null>(null);
+  const gestureByKeyRef = useRef<Record<string, string>>({});
+  const currentGestureEmojiRef = useRef<string | null>(null);
+  const gestureMap: Record<string, string> = {
+    Thumb_Up: "👍",
+    Thumb_Down: "👎",
+    Open_Palm: "✋",
+    Pointing_Up: "☝️",
+    Victory: "✌️",
+    ILoveYou: "🤟",
+    Closed_Fist: "✊",
+    OK: "👌",
+    Call_Me: "🤙",
+  };
   const strokesRef = useRef<Stroke[]>([]);
   const imagesRef = useRef<ImageItem[]>([]);
   const currentStrokeRef = useRef<Stroke | null>(null);
@@ -31,6 +54,7 @@ export default function RoomPage() {
   const dragOffsetRef = useRef<Point>({ x: 0, y: 0 });
   const [tool, setTool] = useState<"cursor" | "pen" | "image">("cursor");
   const activeStrokeIndexByIdRef = useRef<Record<string, number>>({});
+  const [handAndGesturesEnabled, setHandAndGesturesEnabled] = useState(false);
 
   const onAddImage = async () => {
     try {
@@ -116,7 +140,12 @@ export default function RoomPage() {
         if (!c) continue;
         const isIdle = now - c.t > 3000;
         ctx.globalAlpha = isIdle ? 0.55 : 1;
-        drawCursor(ctx, c.x, c.y, meta);
+        const emoji = gestureByKeyRef.current[id];
+        if (emoji) {
+          drawEmojiCursor(ctx, c.x, c.y, emoji);
+        } else {
+          drawCursor(ctx, c.x, c.y, meta);
+        }
       }
       ctx.globalAlpha = 1;
       requestAnimationFrame(draw);
@@ -244,6 +273,11 @@ export default function RoomPage() {
       if (idx >= 0) imagesRef.current[idx] = { ...imagesRef.current[idx], x, y };
     });
 
+    channel.on("broadcast", { event: "gesture" }, ({ payload }) => {
+      const { key, emoji } = payload as { key: string; emoji: string };
+      gestureByKeyRef.current[key] = emoji;
+    });
+
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerdown", onDown);
     window.addEventListener("pointerup", onUp);
@@ -262,6 +296,7 @@ export default function RoomPage() {
     <main className="min-h-screen">
       <div className="fixed inset-0">
         <canvas ref={canvasRef} className="w-full h-full block cursor-none" />
+        <video ref={videoRef} className="hidden" playsInline muted />
       </div>
       <div className="fixed top-3 left-1/2 -translate-x-1/2 z-10 w-[min(720px,92vw)]">
         <div className="rounded-xl border border-gray-200 bg-white/90 backdrop-blur px-4 py-2 shadow-sm">
@@ -287,6 +322,146 @@ export default function RoomPage() {
                 className={`px-3 py-2 rounded-md text-sm border border-gray-200`}
               >
                 Add image
+              </button>
+              <button
+                onClick={async () => {
+                  // Unified toggle: both Hand + Gestures
+                  if (handEnabledRef.current || gesturesEnabledRef.current) {
+                    handEnabledRef.current = false;
+                    gesturesEnabledRef.current = false;
+                    setHandAndGesturesEnabled(false);
+                    if (streamRef.current) {
+                      streamRef.current.getTracks().forEach((t) => t.stop());
+                      streamRef.current = null;
+                    }
+                    if (detectorRef.current && typeof detectorRef.current.close === 'function') {
+                      try { detectorRef.current.close(); } catch {}
+                    }
+                    detectorRef.current = null;
+                    if (gestureDetectorRef.current && typeof gestureDetectorRef.current.close === 'function') {
+                      try { gestureDetectorRef.current.close(); } catch {}
+                    }
+                    gestureDetectorRef.current = null;
+                    if (originalConsoleInfoRef.current) { console.info = originalConsoleInfoRef.current; originalConsoleInfoRef.current = null; }
+                    if (originalConsoleLogRef.current) { console.log = originalConsoleLogRef.current; originalConsoleLogRef.current = null; }
+                    return;
+                  }
+                  try {
+                    if (!originalConsoleInfoRef.current) {
+                      originalConsoleInfoRef.current = console.info;
+                      console.info = (...args: any[]) => {
+                        const first = args?.[0];
+                        if (typeof first === 'string' && first.includes('TensorFlow Lite XNNPACK delegate')) return;
+                        return originalConsoleInfoRef.current?.apply(console, args as any);
+                      };
+                    }
+                    if (!originalConsoleLogRef.current) {
+                      originalConsoleLogRef.current = console.log;
+                      console.log = (...args: any[]) => {
+                        const first = args?.[0];
+                        if (typeof first === 'string' && first.includes('TensorFlow Lite XNNPACK delegate')) return;
+                        return originalConsoleLogRef.current?.apply(console, args as any);
+                      };
+                    }
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                    const video = videoRef.current!;
+                    video.srcObject = stream;
+                    await video.play();
+                    streamRef.current = stream;
+                    detectorRef.current = await createHandDetector();
+                    gestureDetectorRef.current = await createGestureRecognizer();
+                    handEnabledRef.current = true;
+                    gesturesEnabledRef.current = true;
+                    setHandAndGesturesEnabled(true);
+                    const rafLoop = () => {
+                      if (!handEnabledRef.current) return;
+                      const canvas = canvasRef.current;
+                      const channel = channelRef.current;
+                      if (!canvas || !channel) return;
+                      if (
+                        video.paused ||
+                        video.ended ||
+                        video.readyState < 2 ||
+                        video.videoWidth === 0 ||
+                        video.videoHeight === 0 ||
+                        !detectorRef.current?.detectForVideo
+                      ) {
+                        requestAnimationFrame(rafLoop);
+                        return;
+                      }
+                      const rect = canvas.getBoundingClientRect();
+                      let ts = performance.now();
+                      if (ts <= lastDetectTsRef.current) ts = lastDetectTsRef.current + 1;
+                      lastDetectTsRef.current = ts;
+                      try {
+                        const handsRes = detectorRef.current.detectForVideo(video, ts);
+                        const tip = handsRes?.landmarks?.[0]?.[8];
+                        if (tip) {
+                          const x = (1 - tip.x) * rect.width;
+                          const y = tip.y * rect.height;
+                          cursors.current[connId] = { x, y, t: ts };
+                          channel.send({ type: "broadcast", event: "cursor", payload: { key: connId, x, y } });
+                        }
+                        if (gesturesEnabledRef.current && gestureDetectorRef.current?.recognizeForVideo) {
+                          const gRes = gestureDetectorRef.current.recognizeForVideo(video, ts);
+                          const top = gRes?.gestures?.[0]?.[0];
+                          const name = top?.categoryName as string | undefined;
+                          const emoji = name ? gestureMap[name] : undefined;
+                          if (emoji && emoji !== currentGestureEmojiRef.current) {
+                            currentGestureEmojiRef.current = emoji;
+                            channel.send({ type: "broadcast", event: "gesture", payload: { key: connId, emoji } });
+                            gestureByKeyRef.current[connId] = emoji;
+                          }
+                        }
+                      } catch {}
+                      requestAnimationFrame(rafLoop);
+                    };
+                    if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
+                      const rvc = (video as any).requestVideoFrameCallback.bind(video);
+                      const onFrame = (_now: any, meta: any) => {
+                        if (!handEnabledRef.current) return;
+                        const canvas = canvasRef.current;
+                        const channel = channelRef.current;
+                        if (!canvas || !channel) return;
+                        const rect = canvas.getBoundingClientRect();
+                        let ts = Math.max((meta?.mediaTime || 0) * 1000, performance.now());
+                        if (ts <= lastDetectTsRef.current) ts = lastDetectTsRef.current + 1;
+                        lastDetectTsRef.current = ts;
+                        try {
+                          const handsRes = detectorRef.current.detectForVideo(video, ts);
+                          const tip = handsRes?.landmarks?.[0]?.[8];
+                          if (tip) {
+                            const x = (1 - tip.x) * rect.width;
+                            const y = tip.y * rect.height;
+                            cursors.current[connId] = { x, y, t: ts };
+                            channel.send({ type: "broadcast", event: "cursor", payload: { key: connId, x, y } });
+                          }
+                          if (gesturesEnabledRef.current && gestureDetectorRef.current?.recognizeForVideo) {
+                            const gRes = gestureDetectorRef.current.recognizeForVideo(video, ts);
+                            const top = gRes?.gestures?.[0]?.[0];
+                            const name = top?.categoryName as string | undefined;
+                            const emoji = name ? gestureMap[name] : undefined;
+                            if (emoji && emoji !== currentGestureEmojiRef.current) {
+                              currentGestureEmojiRef.current = emoji;
+                              channel.send({ type: "broadcast", event: "gesture", payload: { key: connId, emoji } });
+                              gestureByKeyRef.current[connId] = emoji;
+                            }
+                          }
+                        } catch {}
+                        rvc(onFrame);
+                      };
+                      rvc(onFrame);
+                    } else {
+                      requestAnimationFrame(rafLoop);
+                    }
+                  } catch (e) {
+                    console.warn("Hand control failed:", e);
+                    handEnabledRef.current = false;
+                  }
+                }}
+                className={`px-3 py-2 rounded-md text-sm border ${handAndGesturesEnabled ? 'bg-black text-white border-black' : 'border-gray-200'}`}
+              >
+                Hand + Gestures
               </button>
             </div>
           </div>
@@ -336,6 +511,17 @@ function drawCursor(
   ctx.fill();
   ctx.fillStyle = "#111827";
   ctx.fillText(label, px + paddingX, py + h - paddingY);
+  ctx.restore();
+}
+
+function drawEmojiCursor(ctx: CanvasRenderingContext2D, x: number, y: number, emoji: string) {
+  ctx.save();
+  ctx.font = "28px Apple Color Emoji, Noto Color Emoji, Segoe UI Emoji, emoji";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.shadowColor = "rgba(0,0,0,0.25)";
+  ctx.shadowBlur = 6;
+  ctx.fillText(emoji, x, y);
   ctx.restore();
 }
 
