@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { browserClient } from "@/lib/supabase/client";
 import ShareLink from "@/components/ShareLink";
+import { fal } from "@fal-ai/client";
 import { createHandDetector, createGestureRecognizer } from "@/lib/hand/mediapipe";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
@@ -40,6 +41,16 @@ export default function RoomPage() {
   const toolByKeyRef = useRef<Record<string, { tool: 'cursor' | 'pen' | 'eraser'; color: string }>>({});
   const gestureDrawingRef = useRef<boolean>(false);
   const gestureStrokeActiveRef = useRef<boolean>(false);
+  // Selection via Victory gesture
+  const selectionActiveRef = useRef<boolean>(false);
+  const selectionStartRef = useRef<Point | null>(null);
+  const selectionRectRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null);
+  const selectionByKeyRef = useRef<Record<string, { x: number; y: number; w: number; h: number } | null>>({});
+  const [showGenerate, setShowGenerate] = useState(false);
+  const [generating, setGenerating] = useState(false);
+
+  // Configure fal client to use proxy
+  fal.config({ proxyUrl: "/api/fal/proxy" });
   const gestureMap: Record<string, string> = {
     Thumb_Up: "👍",
     Thumb_Down: "👎",
@@ -164,6 +175,21 @@ export default function RoomPage() {
         ctx.stroke();
       }
       ctx.restore();
+
+      // render selection rectangles
+      for (const [id, rect] of Object.entries(selectionByKeyRef.current)) {
+        if (!rect) continue;
+        ctx.save();
+        ctx.globalAlpha = 0.15;
+        ctx.fillStyle = '#3b82f6';
+        ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+        ctx.globalAlpha = 1;
+        ctx.setLineDash([6, 6]);
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+        ctx.restore();
+      }
       // cursors
       const now = performance.now();
       for (const [id, cur] of Object.entries(cursors.current)) {
@@ -335,6 +361,18 @@ export default function RoomPage() {
       const { key, tool, color } = payload as { key: string; tool: 'cursor' | 'pen' | 'eraser'; color: string };
       toolByKeyRef.current[key] = { tool, color };
     });
+    channel.on("broadcast", { event: "selection-start" }, ({ payload }) => {
+      const { key, x, y } = payload as { key: string; x: number; y: number };
+      selectionByKeyRef.current[key] = { x, y, w: 0, h: 0 };
+    });
+    channel.on("broadcast", { event: "selection-update" }, ({ payload }) => {
+      const { key, x, y, w, h } = payload as { key: string; x: number; y: number; w: number; h: number };
+      selectionByKeyRef.current[key] = { x, y, w, h };
+    });
+    channel.on("broadcast", { event: "selection-end" }, ({ payload }) => {
+      const { key } = payload as { key: string };
+      selectionByKeyRef.current[key] = null;
+    });
 
     // (RPS handlers removed)
 
@@ -358,6 +396,54 @@ export default function RoomPage() {
         <canvas ref={canvasRef} className="w-full h-full block cursor-none" />
         <video ref={videoRef} className="hidden" playsInline muted />
       </div>
+      {showGenerate && selectionRectRef.current && (
+        <div className="fixed z-20" style={{ left: selectionRectRef.current.x + selectionRectRef.current.w + 8, top: selectionRectRef.current.y }}>
+          <button
+            disabled={generating}
+            onClick={async () => {
+              if (!selectionRectRef.current) return;
+              try {
+                setGenerating(true);
+                const prompt = 'Using the provided input image as reference, generate a Pixar-like character of the subject. Preserve pose and facial expression, vibrant colors, clean background, high quality.';
+                // Crop selection from the canvas (respect DPR)
+                const rect = selectionRectRef.current;
+                const canvas = canvasRef.current!;
+                const dpr = Math.max(1, window.devicePixelRatio || 1);
+                const src = document.createElement('canvas');
+                const sctx = src.getContext('2d')!;
+                src.width = Math.max(1, Math.floor(rect.w * dpr));
+                src.height = Math.max(1, Math.floor(rect.h * dpr));
+                // drawImage: sx,sy in device pixels
+                sctx.drawImage(canvas, Math.floor(rect.x * dpr), Math.floor(rect.y * dpr), Math.floor(rect.w * dpr), Math.floor(rect.h * dpr), 0, 0, src.width, src.height);
+                const dataUrl = src.toDataURL('image/png');
+                const upRes = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl, contentType: 'image/png' }) });
+                const upJson = await upRes.json();
+                const initUrl = upJson?.url;
+                type FalFluxResult = { images?: Array<{ url: string }> };
+                const result = await fal.subscribe<FalFluxResult>('fal-ai/flux/dev', {
+                  input: { prompt, image_size: 'square_hd', image_url: initUrl, strength: 0.7 } as unknown as Record<string, unknown>,
+                  pollInterval: 2500,
+                  logs: true,
+                });
+                const url = (result as FalFluxResult)?.images?.[0]?.url;
+                if (!url) return;
+                const item: ImageItem = { id: crypto.randomUUID(), url, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+                // Load locally first, then broadcast for peers
+                const loaded = await loadImageItem(item);
+                imagesRef.current = [...imagesRef.current, loaded];
+                channelRef.current?.send({ type: 'broadcast', event: 'image-add', payload: item });
+              } finally {
+                setGenerating(false);
+                setShowGenerate(false);
+                selectionRectRef.current = null;
+              }
+            }}
+            className="px-2 py-1 rounded-md text-xs border border-gray-200 bg-white shadow"
+          >
+            {generating ? 'Generating…' : 'Generate'}
+          </button>
+        </div>
+      )}
       <div className="fixed top-3 left-1/2 -translate-x-1/2 z-10 w-[min(720px,92vw)]">
         <div className="rounded-xl border border-gray-200 bg-white/90 backdrop-blur px-4 py-2 shadow-sm">
           <div className="flex items-center justify-between gap-3">
@@ -394,12 +480,6 @@ export default function RoomPage() {
                 className={`px-3 py-2 rounded-md text-sm border ${tool === "eraser" ? "bg-black text-white border-black" : "border-gray-200"}`}
               >
                 Eraser
-              </button>
-              <button
-                onClick={() => onAddImage()}
-                className={`px-3 py-2 rounded-md text-sm border border-gray-200`}
-              >
-                Add image
               </button>
               <button
                 onClick={async () => {
@@ -549,6 +629,33 @@ export default function RoomPage() {
                             channel.send({ type: 'broadcast', event: 'stroke-end', payload: { id: currentStrokeRef.current.id } });
                             currentStrokeRef.current = null;
                           }
+                          // Selection (Victory)
+                          if (tip && name === 'Victory') {
+                            const hx = (1 - tip.x) * rect.width;
+                            const hy = tip.y * rect.height;
+                            if (!selectionActiveRef.current) {
+                              selectionActiveRef.current = true;
+                              selectionStartRef.current = { x: hx, y: hy };
+                              selectionRectRef.current = { x: hx, y: hy, w: 0, h: 0 };
+                              channel.send({ type: 'broadcast', event: 'selection-start', payload: { key: connId, x: hx, y: hy } });
+                            } else if (selectionStartRef.current) {
+                              const sx = selectionStartRef.current.x;
+                              const sy = selectionStartRef.current.y;
+                              const rx = Math.min(sx, hx);
+                              const ry = Math.min(sy, hy);
+                              const rw = Math.abs(hx - sx);
+                              const rh = Math.abs(hy - sy);
+                              selectionRectRef.current = { x: rx, y: ry, w: rw, h: rh };
+                              selectionByKeyRef.current[connId] = selectionRectRef.current;
+                              channel.send({ type: 'broadcast', event: 'selection-update', payload: { key: connId, x: rx, y: ry, w: rw, h: rh } });
+                            }
+                          } else if (selectionActiveRef.current) {
+                            selectionActiveRef.current = false;
+                            selectionStartRef.current = null;
+                            channel.send({ type: 'broadcast', event: 'selection-end', payload: { key: connId } });
+                            // Show generate button for local selection
+                            if (selectionRectRef.current) setShowGenerate(true);
+                          }
                         }
                       } catch {}
                       requestAnimationFrame(rafLoop);
@@ -631,6 +738,31 @@ export default function RoomPage() {
                               channel.send({ type: 'broadcast', event: 'stroke-end', payload: { id: currentStrokeRef.current.id } });
                               currentStrokeRef.current = null;
                             }
+                            if (tip && name === 'Victory') {
+                              const hx = (1 - tip.x) * rect.width;
+                              const hy = tip.y * rect.height;
+                              if (!selectionActiveRef.current) {
+                                selectionActiveRef.current = true;
+                                selectionStartRef.current = { x: hx, y: hy };
+                                selectionRectRef.current = { x: hx, y: hy, w: 0, h: 0 };
+                                channel.send({ type: 'broadcast', event: 'selection-start', payload: { key: connId, x: hx, y: hy } });
+                              } else if (selectionStartRef.current) {
+                                const sx = selectionStartRef.current.x;
+                                const sy = selectionStartRef.current.y;
+                                const rx = Math.min(sx, hx);
+                                const ry = Math.min(sy, hy);
+                                const rw = Math.abs(hx - sx);
+                                const rh = Math.abs(hy - sy);
+                                selectionRectRef.current = { x: rx, y: ry, w: rw, h: rh };
+                                selectionByKeyRef.current[connId] = selectionRectRef.current;
+                                channel.send({ type: 'broadcast', event: 'selection-update', payload: { key: connId, x: rx, y: ry, w: rw, h: rh } });
+                              }
+                            } else if (selectionActiveRef.current) {
+                              selectionActiveRef.current = false;
+                              selectionStartRef.current = null;
+                              channel.send({ type: 'broadcast', event: 'selection-end', payload: { key: connId } });
+                              if (selectionRectRef.current) setShowGenerate(true);
+                            }
                           }
                         } catch {}
                         rvc(onFrame);
@@ -646,7 +778,7 @@ export default function RoomPage() {
                 }}
                 className={`px-3 py-2 rounded-md text-sm border ${handAndGesturesEnabled ? 'bg-black text-white border-black' : 'border-gray-200'}`}
               >
-                Hand + Gestures
+                Hands-Off Mode
               </button>
             </div>
           </div>
@@ -808,11 +940,22 @@ function hitImage(item: ImageItem, x: number, y: number) {
 
 async function loadImageItem(item: ImageItem): Promise<ImageItem> {
   return new Promise((resolve) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve({ ...item, img });
-    img.onerror = () => resolve(item);
-    img.src = item.url;
+    // Try with CORS first
+    const tryLoad = (useCORS: boolean) => {
+      const img = new Image();
+      if (useCORS) img.crossOrigin = "anonymous" as any;
+      img.onload = () => resolve({ ...item, img });
+      img.onerror = () => {
+        if (useCORS) {
+          // Fallback without CORS if remote server lacks headers
+          tryLoad(false);
+        } else {
+          resolve(item);
+        }
+      };
+      img.src = item.url;
+    };
+    tryLoad(true);
   });
 }
 
