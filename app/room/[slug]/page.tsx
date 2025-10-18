@@ -69,6 +69,8 @@ export default function RoomPage() {
   const draggingImageIdRef = useRef<string | null>(null);
   const dragOffsetRef = useRef<Point>({ x: 0, y: 0 });
   const [tool, setTool] = useState<"cursor" | "pen" | "image" | "eraser" | "select">("cursor");
+  const brushWidthRef = useRef<number>(3);
+  const [brushWidth, setBrushWidth] = useState(3);
   const activeStrokeIndexByIdRef = useRef<Record<string, number>>({});
   const [handAndGesturesEnabled, setHandAndGesturesEnabled] = useState(false);
   
@@ -162,6 +164,52 @@ export default function RoomPage() {
             console.log('[ElevenLabs] After change - toolByKeyRef:', JSON.stringify(toolByKeyRef.current));
             channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color: newColor } });
             return `Pen color changed to ${colorName}. Draw to see your new color!`;
+          },
+          change_brush_size: async (params: any) => {
+            console.log('[ElevenLabs] change_brush_size called with params:', params);
+            console.log('[ElevenLabs] Current brush width:', brushWidthRef.current);
+            
+            // Try multiple ways to extract size/thickness
+            let size = params?.size || params?.thickness || params?.width;
+            
+            // Handle relative terms
+            if (params?.action === 'increase' || params?.increase === true) {
+              size = Math.min(brushWidthRef.current + 3, 20);
+            } else if (params?.action === 'decrease' || params?.decrease === true) {
+              size = Math.max(brushWidthRef.current - 3, 1);
+            } else if (typeof params === 'string') {
+              // Handle strings like "thicker", "thinner", "5", etc.
+              const lower = params.toLowerCase();
+              if (lower.includes('thick') || lower.includes('big') || lower.includes('large') || lower.includes('increase')) {
+                size = Math.min(brushWidthRef.current + 3, 20);
+              } else if (lower.includes('thin') || lower.includes('small') || lower.includes('decrease')) {
+                size = Math.max(brushWidthRef.current - 3, 1);
+              } else {
+                const parsed = parseInt(params);
+                if (!isNaN(parsed)) size = Math.max(1, Math.min(20, parsed));
+              }
+            }
+            
+            // Convert string numbers to actual numbers
+            if (typeof size === 'string') {
+              const parsed = parseInt(size);
+              if (!isNaN(parsed)) size = parsed;
+            }
+            
+            // Validate size is a number
+            if (typeof size !== 'number' || isNaN(size)) {
+              return 'Please specify a brush size between 1 and 20, or say "make it thicker" or "make it thinner".';
+            }
+            
+            // Clamp between 1 and 20
+            const newSize = Math.max(1, Math.min(20, size));
+            brushWidthRef.current = newSize;
+            setBrushWidth(newSize);
+            console.log('[ElevenLabs] Brush size changed to:', newSize);
+            
+            if (newSize <= 3) return `Brush is now thin (size ${newSize})`;
+            else if (newSize <= 8) return `Brush is now medium (size ${newSize})`;
+            else return `Brush is now thick (size ${newSize})`;
           },
           generate_image: async (params: any) => {
             console.log('[ElevenLabs] generate_image called with params:', params);
@@ -475,8 +523,9 @@ export default function RoomPage() {
       const y = e.clientY - rect.top;
       if (tool === "pen") {
         const currentColor = toolByKeyRef.current[connId]?.color || color;
-        console.log('[onDown] Creating pen stroke - connId:', connId, 'currentColor:', currentColor, 'toolByKeyRef:', JSON.stringify(toolByKeyRef.current[connId]));
-        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color: currentColor, width: 3, userId: self?.id || connId };
+        const currentWidth = brushWidthRef.current;
+        console.log('[onDown] Creating pen stroke - connId:', connId, 'currentColor:', currentColor, 'brushWidth:', currentWidth, 'toolByKeyRef:', JSON.stringify(toolByKeyRef.current[connId]));
+        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color: currentColor, width: currentWidth, userId: self?.id || connId };
         currentStrokeRef.current = stroke;
         strokesRef.current = [...strokesRef.current, stroke];
       } else if (tool === "select") {
@@ -876,8 +925,9 @@ export default function RoomPage() {
                             const hy = tip.y * rect.height;
                             if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
                               const currentColor = toolByKeyRef.current[connId]?.color || color;
-                              console.log('[Gesture Pointing_Up] Creating stroke - connId:', connId, 'currentColor:', currentColor, 'toolByKeyRef:', JSON.stringify(toolByKeyRef.current[connId]));
-                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: currentColor, width: 3, userId: self?.id || connId };
+                              const currentWidth = brushWidthRef.current;
+                              console.log('[Gesture Pointing_Up] Creating stroke - connId:', connId, 'currentColor:', currentColor, 'brushWidth:', currentWidth, 'toolByKeyRef:', JSON.stringify(toolByKeyRef.current[connId]));
+                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: currentColor, width: currentWidth, userId: self?.id || connId };
                               currentStrokeRef.current = stroke;
                               strokesRef.current = [...strokesRef.current, stroke];
                               channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
@@ -1005,7 +1055,8 @@ export default function RoomPage() {
                               const hy = tip.y * rect.height;
                               if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
                                 const currentColor = toolByKeyRef.current[connId]?.color || color;
-                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: currentColor, width: 3, userId: self?.id || connId };
+                                const currentWidth = brushWidthRef.current;
+                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: currentColor, width: currentWidth, userId: self?.id || connId };
                                 currentStrokeRef.current = stroke;
                                 strokesRef.current = [...strokesRef.current, stroke];
                                 channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });

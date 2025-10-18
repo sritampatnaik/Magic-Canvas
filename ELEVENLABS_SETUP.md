@@ -19,7 +19,7 @@ ELEVENLABS_AGENT_ID=your_agent_id_here
 1. Go to https://elevenlabs.io/ and create a Conversational AI agent
 2. Set the agent's system prompt (see below)
 3. Navigate to your agent's Tools/Client Tools section
-4. Add the following two client tools:
+4. Add the following three client tools:
 
 ### System Prompt
 
@@ -29,10 +29,12 @@ Use this system prompt for your ElevenLabs agent:
 You are a creative AI assistant helping users with a collaborative drawing canvas. Your role is to:
 
 1. Help users change pen colors using natural language (e.g., "make it blue", "change to dark red")
-2. Generate AI art based on selected areas of the canvas using their spoken prompts
+2. Help users adjust brush size/thickness (e.g., "make it thicker", "size 10", "make the brush thinner")
+3. Generate AI art based on selected areas of the canvas using their spoken prompts
 
 IMPORTANT RULES:
 - For color changes: Be conversational and confirm the color change. Use simple color names like "red", "blue", "green", "dark blue", "light red", etc.
+- For brush size changes: Accept numbers (1-20) or relative terms ("thicker", "thinner", "bigger", "smaller", "increase", "decrease")
 - For image generation:
   * The user MUST first select an area on the canvas (using Victory gesture or Select Area tool)
   * If they haven't selected an area, politely ask them to select one first
@@ -51,6 +53,12 @@ CONVERSATION STYLE:
 EXAMPLE INTERACTIONS:
 User: "Make it red"
 You: "Got it! Changing to red now." [call change_pen_color with "red"]
+
+User: "Make the brush thicker"
+You: "Making it thicker!" [call change_brush_size with action="increase"]
+
+User: "Set brush size to 10"
+You: "Brush size set to 10!" [call change_brush_size with size=10]
 
 User: "Create an abstract painting"
 You: [Check if area is selected] "Perfect! Generating an abstract painting from your sketch!" [call generate_image with "abstract painting"]
@@ -88,7 +96,40 @@ Keep responses under 2 sentences. Focus on action and creativity!
 }
 ```
 
-### Tool 2: generate_image
+### Tool 2: change_brush_size
+
+```json
+{
+  "type": "client",
+  "name": "change_brush_size",
+  "description": "Change the brush stroke thickness. Accepts size numbers (1-20) or relative terms like 'thicker', 'thinner', 'increase', 'decrease'.",
+  "expects_response": true,
+  "response_timeout_secs": 5,
+  "parameters": [
+    {
+      "name": "size",
+      "type": "number",
+      "description": "The brush size from 1 (thin) to 20 (thick). Or use 'action' parameter for relative changes.",
+      "required": false
+    },
+    {
+      "name": "action",
+      "type": "string",
+      "description": "Relative action: 'increase' or 'decrease' the brush size",
+      "required": false
+    }
+  ],
+  "dynamic_variables": {
+    "dynamic_variable_placeholders": {}
+  },
+  "assignments": [],
+  "disable_interruptions": false,
+  "force_pre_tool_speech": "auto",
+  "execution_mode": "immediate"
+}
+```
+
+### Tool 3: generate_image
 
 ```json
 {
@@ -117,16 +158,19 @@ Keep responses under 2 sentences. Focus on action and creativity!
 
 ## Usage
 
-1. Enable hand/gesture tracking by clicking "Hands-Off Mode" button
+1. Enable hand/gesture tracking by clicking "Magic Mode" button
 2. Show a **Thumbs Up** 👍 gesture to activate voice control
 3. Speak commands like:
    - "Change the pen color to blue"
+   - "Make the brush thicker"
+   - "Set brush size to 10"
    - "Generate an abstract painting" (after selecting an area)
 4. Show a **Thumbs Down** 👎 gesture to deactivate voice control
 
 ## Features
 
 - **Color Change**: Voice agent can change pen color to any supported color name
+- **Brush Size Control**: Voice agent can adjust brush thickness using numbers (1-20) or relative terms
 - **Dynamic Image Generation**: Voice agent can generate images with custom prompts based on selected canvas areas
 - **Real-time Feedback**: Microphone icon shows when voice agent is active (red indicator)
 - **Automatic Integration**: Works seamlessly with existing gesture controls
@@ -136,6 +180,12 @@ Keep responses under 2 sentences. Focus on action and creativity!
 Basic colors: red, blue, green, yellow, purple, orange, pink, black, white, gray, brown, cyan, teal
 
 Color variations: dark/light prefixes (e.g., "dark red", "light blue")
+
+## Brush Size Control
+
+- **Numbers**: Say "size 5", "set brush to 10", "make it 15" (range: 1-20)
+- **Relative**: Say "make it thicker", "thinner", "bigger brush", "smaller", "increase", "decrease"
+- **Descriptions**: Agent provides feedback (thin: 1-3, medium: 4-8, thick: 9-20)
 
 ## Troubleshooting
 
