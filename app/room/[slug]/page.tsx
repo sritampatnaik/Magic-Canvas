@@ -67,7 +67,7 @@ export default function RoomPage() {
   const currentStrokeRef = useRef<Stroke | null>(null);
   const draggingImageIdRef = useRef<string | null>(null);
   const dragOffsetRef = useRef<Point>({ x: 0, y: 0 });
-  const [tool, setTool] = useState<"cursor" | "pen" | "image" | "eraser">("cursor");
+  const [tool, setTool] = useState<"cursor" | "pen" | "image" | "eraser" | "select">("cursor");
   const activeStrokeIndexByIdRef = useRef<Record<string, number>>({});
   const [handAndGesturesEnabled, setHandAndGesturesEnabled] = useState(false);
 
@@ -214,7 +214,8 @@ export default function RoomPage() {
           if (emoji) {
             drawEmojiCursor(ctx, c.x, c.y, emoji);
           } else {
-            drawCursor(ctx, c.x, c.y, meta);
+            // No gesture detected: show a disabled icon
+            drawDisabledCursor(ctx, c.x, c.y);
           }
         }
       }
@@ -256,6 +257,18 @@ export default function RoomPage() {
         currentStrokeRef.current.points.push({ x, y });
         channel.send({ type: "broadcast", event: "stroke-append", payload: { id: currentStrokeRef.current.id, point: { x, y } } });
       }
+      // Manual selection drag update
+      if (tool === "select" && selectionActiveRef.current && selectionStartRef.current) {
+        const sx = selectionStartRef.current.x;
+        const sy = selectionStartRef.current.y;
+        const rx = Math.min(sx, x);
+        const ry = Math.min(sy, y);
+        const rw = Math.abs(x - sx);
+        const rh = Math.abs(y - sy);
+        selectionRectRef.current = { x: rx, y: ry, w: rw, h: rh };
+        selectionByKeyRef.current[connId] = selectionRectRef.current;
+        channelRef.current?.send({ type: 'broadcast', event: 'selection-update', payload: { key: connId, x: rx, y: ry, w: rw, h: rh } });
+      }
       if (tool === "eraser" && currentStrokeRef.current && currentStrokeRef.current.mode === 'erase') {
         currentStrokeRef.current.points.push({ x, y });
         channel.send({ type: 'broadcast', event: 'stroke-append', payload: { id: currentStrokeRef.current.id, point: { x, y } } });
@@ -280,6 +293,12 @@ export default function RoomPage() {
         const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color, width: 3, userId: self.id };
         currentStrokeRef.current = stroke;
         strokesRef.current = [...strokesRef.current, stroke];
+      } else if (tool === "select") {
+        selectionActiveRef.current = true;
+        selectionStartRef.current = { x, y };
+        selectionRectRef.current = { x, y, w: 0, h: 0 };
+        selectionByKeyRef.current[connId] = selectionRectRef.current;
+        channelRef.current?.send({ type: 'broadcast', event: 'selection-start', payload: { key: connId, x, y } });
       } else if (tool === "eraser") {
         const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color: '#000', width: 48, userId: self.id, mode: 'erase' };
         currentStrokeRef.current = stroke;
@@ -301,6 +320,12 @@ export default function RoomPage() {
       if ((tool === "pen" || tool === 'eraser') && currentStrokeRef.current) {
         channel.send({ type: "broadcast", event: "stroke-end", payload: { id: currentStrokeRef.current.id } });
         currentStrokeRef.current = null;
+      }
+      if (tool === 'select' && selectionActiveRef.current) {
+        selectionActiveRef.current = false;
+        selectionStartRef.current = null;
+        channelRef.current?.send({ type: 'broadcast', event: 'selection-end', payload: { key: connId } });
+        if (selectionRectRef.current) setShowGenerate(true);
       }
       if (tool === "cursor" && draggingImageIdRef.current) {
         const id = draggingImageIdRef.current;
@@ -404,38 +429,76 @@ export default function RoomPage() {
               if (!selectionRectRef.current) return;
               try {
                 setGenerating(true);
-                const prompt = 'Using the provided input image as reference, generate a Pixar-like character of the subject. Preserve pose and facial expression, vibrant colors, clean background, high quality.';
-                // Crop selection from the canvas (respect DPR)
+                const prompt = 'Using the selected child-like sketch as reference, generate an abstract painting in a contemporary style. Preserve the composition and gesture; amplify shapes and rhythm; use a rich, vibrant color palette; painterly brush strokes; textured canvas look; high quality; avoid photorealism; keep abstraction and child-like spontaneity.';
+                // Crop selection from the canvas (respect DPR), with solid background to avoid transparent->black previews
                 const rect = selectionRectRef.current;
                 const canvas = canvasRef.current!;
                 const dpr = Math.max(1, window.devicePixelRatio || 1);
                 const src = document.createElement('canvas');
                 const sctx = src.getContext('2d')!;
-                src.width = Math.max(1, Math.floor(rect.w * dpr));
-                src.height = Math.max(1, Math.floor(rect.h * dpr));
+                const sw = Math.max(1, Math.floor(rect.w * dpr));
+                const sh = Math.max(1, Math.floor(rect.h * dpr));
+                src.width = sw;
+                src.height = sh;
+                // Optional: paint a white background to prevent viewer black background for transparent areas
+                sctx.fillStyle = '#ffffff';
+                sctx.fillRect(0, 0, sw, sh);
                 // drawImage: sx,sy in device pixels
-                sctx.drawImage(canvas, Math.floor(rect.x * dpr), Math.floor(rect.y * dpr), Math.floor(rect.w * dpr), Math.floor(rect.h * dpr), 0, 0, src.width, src.height);
-                const dataUrl = src.toDataURL('image/png');
+                sctx.drawImage(
+                  canvas,
+                  Math.floor(rect.x * dpr),
+                  Math.floor(rect.y * dpr),
+                  sw,
+                  sh,
+                  0,
+                  0,
+                  sw,
+                  sh
+                );
+                // Downscale to 512x512 for faster i2i
+                const sized = document.createElement('canvas');
+                const szctx = sized.getContext('2d')!;
+                sized.width = 512; sized.height = 512;
+                szctx.imageSmoothingEnabled = true;
+                szctx.imageSmoothingQuality = 'high';
+                szctx.drawImage(src, 0, 0, sized.width, sized.height);
+                const dataUrl = sized.toDataURL('image/png');
                 const upRes = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl, contentType: 'image/png' }) });
                 const upJson = await upRes.json();
                 const initUrl = upJson?.url;
-                type FalFluxResult = { images?: Array<{ url: string }> };
-                const result = await fal.subscribe<FalFluxResult>('fal-ai/flux/dev', {
-                  input: { prompt, image_size: 'square_hd', image_url: initUrl, strength: 0.7 } as unknown as Record<string, unknown>,
-                  pollInterval: 2500,
-                  logs: true,
-                });
-                const url = (result as FalFluxResult)?.images?.[0]?.url;
+                type FalGenResult = { images?: Array<{ url: string }> };
+                // Prefer image-to-image nano-banana edit with inline base64
+                const result = await fal.subscribe('fal-ai/nano-banana/edit', {
+                  input: { prompt, image_urls: [dataUrl], sync_mode: true } as any,
+                  pollInterval: 1500,
+                  logs: false,
+                }) as FalGenResult;
+                const url = result?.images?.[0]?.url;
                 if (!url) return;
+                // Keep selection visible until after placement
+                const imgRes = await fetch(url);
+                const imgBlob = await imgRes.blob();
+                const objectUrl = URL.createObjectURL(imgBlob);
                 const item: ImageItem = { id: crypto.randomUUID(), url, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
-                // Load locally first, then broadcast for peers
-                const loaded = await loadImageItem(item);
+                // Load locally from objectUrl, broadcast fal URL
+                const loaded = await loadImageItem(item, objectUrl);
                 imagesRef.current = [...imagesRef.current, loaded];
+                // Immediate draw to replace selection area
+                const ctx = canvasRef.current?.getContext('2d');
+                if (ctx && loaded.img) {
+                  const dprDraw = Math.max(1, window.devicePixelRatio || 1);
+                  ctx.save();
+                  ctx.setTransform(dprDraw, 0, 0, dprDraw, 0, 0);
+                  ctx.drawImage(loaded.img, rect.x, rect.y, rect.w, rect.h);
+                  ctx.restore();
+                }
                 channelRef.current?.send({ type: 'broadcast', event: 'image-add', payload: item });
+                // Now clear local selection overlay
+                selectionByKeyRef.current[connId] = null;
+                selectionRectRef.current = null;
+                setShowGenerate(false);
               } finally {
                 setGenerating(false);
-                setShowGenerate(false);
-                selectionRectRef.current = null;
               }
             }}
             className="px-2 py-1 rounded-md text-xs border border-gray-200 bg-white shadow"
@@ -480,6 +543,14 @@ export default function RoomPage() {
                 className={`px-3 py-2 rounded-md text-sm border ${tool === "eraser" ? "bg-black text-white border-black" : "border-gray-200"}`}
               >
                 Eraser
+              </button>
+              <button
+                onClick={() => {
+                  setTool("select");
+                }}
+                className={`px-3 py-2 rounded-md text-sm border ${tool === "select" ? "bg-black text-white border-black" : "border-gray-200"}`}
+              >
+                Select Area
               </button>
               <button
                 onClick={async () => {
@@ -873,6 +944,24 @@ function drawEraserCursor(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.restore();
 }
 
+function drawDisabledCursor(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  ctx.save();
+  // draw a gray circle with a slash (like disabled icon)
+  ctx.shadowColor = 'rgba(0,0,0,0.2)';
+  ctx.shadowBlur = 4;
+  ctx.strokeStyle = '#9CA3AF'; // gray-400
+  ctx.lineWidth = 2;
+  const r = 10;
+  ctx.beginPath();
+  ctx.arc(x, y + 10, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x - r * 0.7, y + 10 - r * 0.7);
+  ctx.lineTo(x + r * 0.7, y + 10 + r * 0.7);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function roundRect(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -938,22 +1027,18 @@ function hitImage(item: ImageItem, x: number, y: number) {
   return x >= item.x && x <= item.x + item.w && y >= item.y && y <= item.y + item.h;
 }
 
-async function loadImageItem(item: ImageItem): Promise<ImageItem> {
+async function loadImageItem(item: ImageItem, sourceOverride?: string): Promise<ImageItem> {
   return new Promise((resolve) => {
-    // Try with CORS first
-    const tryLoad = (useCORS: boolean) => {
+    const src = sourceOverride || item.url;
+    const tryLoad = (withCORS: boolean) => {
       const img = new Image();
-      if (useCORS) img.crossOrigin = "anonymous" as any;
+      if (withCORS) (img as any).crossOrigin = 'anonymous';
       img.onload = () => resolve({ ...item, img });
       img.onerror = () => {
-        if (useCORS) {
-          // Fallback without CORS if remote server lacks headers
-          tryLoad(false);
-        } else {
-          resolve(item);
-        }
+        if (withCORS) tryLoad(false);
+        else resolve(item);
       };
-      img.src = item.url;
+      img.src = src;
     };
     tryLoad(true);
   });
