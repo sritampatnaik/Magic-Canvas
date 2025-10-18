@@ -80,7 +80,11 @@ export default function RoomPage() {
   const [elevenLabsActive, setElevenLabsActive] = useState(false);
 
   // Color name to hex mapping
-  const parseColorName = (colorName: string): string => {
+  const parseColorName = (colorName: string | undefined): string => {
+    const currentColor = toolByKeyRef.current[connId]?.color || color;
+    console.log('[parseColorName] Input:', colorName, 'Current color:', currentColor, 'connId:', connId);
+    if (!colorName) return currentColor; // Return current color if no color name provided
+    
     const colorMap: Record<string, string> = {
       red: '#ef4444', darkred: '#b91c1c', lightred: '#fca5a5',
       blue: '#3b82f6', darkblue: '#1e40af', lightblue: '#93c5fd',
@@ -93,7 +97,9 @@ export default function RoomPage() {
       brown: '#92400e', cyan: '#06b6d4', teal: '#14b8a6',
     };
     const normalized = colorName.toLowerCase().replace(/[\s-]/g, '');
-    return colorMap[normalized] || color;
+    const result = colorMap[normalized] || currentColor;
+    console.log('[parseColorName] Normalized:', normalized, 'Result:', result);
+    return result;
   };
 
   const onAddImage = async () => {
@@ -131,6 +137,91 @@ export default function RoomPage() {
 
       const conversation = await Conversation.startSession({
         signedUrl,
+        clientTools: {
+          change_pen_color: async (params: any) => {
+            console.log('[ElevenLabs] change_pen_color called with params:', params);
+            console.log('[ElevenLabs] params type:', typeof params);
+            console.log('[ElevenLabs] params keys:', Object.keys(params));
+            console.log('[ElevenLabs] Current connId:', connId);
+            console.log('[ElevenLabs] Before change - toolByKeyRef:', JSON.stringify(toolByKeyRef.current));
+            
+            // Try multiple ways to extract color
+            const colorName = params?.color || params?.name || params?.colour || (typeof params === 'string' ? params : null);
+            
+            console.log('[ElevenLabs] Extracted colorName:', colorName);
+            
+            if (!colorName) {
+              console.log('[ElevenLabs] No color provided - returning error');
+              return 'I need you to specify which color you want. For example, say "change to red" or "make it blue".';
+            }
+            
+            const newColor = parseColorName(colorName);
+            console.log('[ElevenLabs] Parsed color:', colorName, '->', newColor);
+            setTool('pen');
+            toolByKeyRef.current[connId] = { tool: 'pen', color: newColor };
+            console.log('[ElevenLabs] After change - toolByKeyRef:', JSON.stringify(toolByKeyRef.current));
+            channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color: newColor } });
+            return `Pen color changed to ${colorName}. Draw to see your new color!`;
+          },
+          generate_image: async (params: any) => {
+            console.log('[ElevenLabs] generate_image called with params:', params);
+            const prompt = params?.prompt;
+            if (!prompt) {
+              return 'Please specify what you want to generate';
+            }
+            if (!selectionRectRef.current) {
+              return 'Please select an area on the canvas first using the Victory gesture or Select Area tool';
+            }
+            
+            try {
+              const rect = selectionRectRef.current;
+              const canvas = canvasRef.current!;
+              const dpr = Math.max(1, window.devicePixelRatio || 1);
+              const src = document.createElement('canvas');
+              const sctx = src.getContext('2d')!;
+              const sw = Math.max(1, Math.floor(rect.w * dpr));
+              const sh = Math.max(1, Math.floor(rect.h * dpr));
+              src.width = sw;
+              src.height = sh;
+              sctx.fillStyle = '#ffffff';
+              sctx.fillRect(0, 0, sw, sh);
+              sctx.drawImage(canvas, Math.floor(rect.x * dpr), Math.floor(rect.y * dpr), sw, sh, 0, 0, sw, sh);
+              const sized = document.createElement('canvas');
+              const szctx = sized.getContext('2d')!;
+              sized.width = 512; sized.height = 512;
+              szctx.imageSmoothingEnabled = true;
+              szctx.imageSmoothingQuality = 'high';
+              szctx.drawImage(src, 0, 0, sized.width, sized.height);
+              const dataUrl = sized.toDataURL('image/png');
+              
+              setGenerating(true);
+              type FalGenResult = { data?: { images?: Array<{ url: string }> }; images?: Array<{ url: string }> };
+              const result = await fal.subscribe('fal-ai/nano-banana/edit', {
+                input: { prompt: prompt || 'abstract painting', image_urls: [dataUrl], sync_mode: true } as any,
+                pollInterval: 1500,
+                logs: false,
+              }) as FalGenResult;
+              
+              const url = result?.data?.images?.[0]?.url || result?.images?.[0]?.url;
+              if (url) {
+                const item: ImageItem = { id: crypto.randomUUID(), url, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+                const loaded = await loadImageItem(item);
+                imagesRef.current = [...imagesRef.current, loaded];
+                channelRef.current?.send({ type: 'broadcast', event: 'image-add', payload: item });
+                selectionByKeyRef.current[connId] = null;
+                selectionRectRef.current = null;
+                setShowGenerate(false);
+                setGenerating(false);
+                return 'Image generated successfully';
+              }
+              setGenerating(false);
+              return 'Failed to generate image';
+            } catch (error: any) {
+              setGenerating(false);
+              return error.message || 'Error generating image';
+            }
+          }
+        },
         onConnect: () => {
           console.log('[ElevenLabs] Connected');
           elevenLabsEnabledRef.current = true;
@@ -148,76 +239,6 @@ export default function RoomPage() {
         },
         onModeChange: (mode) => {
           console.log('[ElevenLabs] Mode changed:', mode);
-        },
-        onMCPToolCall: async (toolCall: { tool_name: string; parameters?: Record<string, string> }) => {
-          console.log('[ElevenLabs] Tool call:', toolCall);
-        
-        if (toolCall.tool_name === 'change_pen_color') {
-          const colorName = toolCall.parameters?.color;
-          if (colorName) {
-            const newColor = parseColorName(colorName);
-            setTool('pen');
-            toolByKeyRef.current[connId] = { tool: 'pen', color: newColor };
-            channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color: newColor } });
-            return { success: true, message: `Pen color changed to ${colorName}` };
-          }
-        } else if (toolCall.tool_name === 'generate_image') {
-          const prompt = toolCall.parameters?.prompt;
-          if (!selectionRectRef.current) {
-            return { success: false, message: 'Please select an area on the canvas first using the Victory gesture or Select Area tool' };
-          }
-          
-          try {
-            // Use the same generation logic but with dynamic prompt
-            const rect = selectionRectRef.current;
-            const canvas = canvasRef.current!;
-            const dpr = Math.max(1, window.devicePixelRatio || 1);
-            const src = document.createElement('canvas');
-            const sctx = src.getContext('2d')!;
-            const sw = Math.max(1, Math.floor(rect.w * dpr));
-            const sh = Math.max(1, Math.floor(rect.h * dpr));
-            src.width = sw;
-            src.height = sh;
-            sctx.fillStyle = '#ffffff';
-            sctx.fillRect(0, 0, sw, sh);
-            sctx.drawImage(canvas, Math.floor(rect.x * dpr), Math.floor(rect.y * dpr), sw, sh, 0, 0, sw, sh);
-            const sized = document.createElement('canvas');
-            const szctx = sized.getContext('2d')!;
-            sized.width = 512; sized.height = 512;
-            szctx.imageSmoothingEnabled = true;
-            szctx.imageSmoothingQuality = 'high';
-            szctx.drawImage(src, 0, 0, sized.width, sized.height);
-            const dataUrl = sized.toDataURL('image/png');
-            
-            setGenerating(true);
-            type FalGenResult = { data?: { images?: Array<{ url: string }> }; images?: Array<{ url: string }> };
-            const result = await fal.subscribe('fal-ai/nano-banana/edit', {
-              input: { prompt: prompt || 'abstract painting', image_urls: [dataUrl], sync_mode: true } as any,
-              pollInterval: 1500,
-              logs: false,
-            }) as FalGenResult;
-            
-            const url = result?.data?.images?.[0]?.url || result?.images?.[0]?.url;
-            if (url) {
-              const item: ImageItem = { id: crypto.randomUUID(), url, x: rect.x, y: rect.y, w: rect.w, h: rect.h };
-              const loaded = await loadImageItem(item);
-              imagesRef.current = [...imagesRef.current, loaded];
-              channelRef.current?.send({ type: 'broadcast', event: 'image-add', payload: item });
-              selectionByKeyRef.current[connId] = null;
-              selectionRectRef.current = null;
-              setShowGenerate(false);
-              setGenerating(false);
-              return { success: true, message: 'Image generated successfully' };
-            }
-            setGenerating(false);
-            return { success: false, message: 'Failed to generate image' };
-          } catch (error: any) {
-            setGenerating(false);
-            return { success: false, message: error.message || 'Error generating image' };
-          }
-        }
-        
-        return { success: false, message: 'Unknown tool' };
         },
       });
 
@@ -453,7 +474,9 @@ export default function RoomPage() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       if (tool === "pen") {
-        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color, width: 3, userId: self?.id || connId };
+        const currentColor = toolByKeyRef.current[connId]?.color || color;
+        console.log('[onDown] Creating pen stroke - connId:', connId, 'currentColor:', currentColor, 'toolByKeyRef:', JSON.stringify(toolByKeyRef.current[connId]));
+        const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x, y }], color: currentColor, width: 3, userId: self?.id || connId };
         currentStrokeRef.current = stroke;
         strokesRef.current = [...strokesRef.current, stroke];
       } else if (tool === "select") {
@@ -835,14 +858,15 @@ export default function RoomPage() {
                           
                           // Gesture-to-tool mapping (broadcast tool state)
                           if (!currentStrokeRef.current && name) {
+                            const currentColor = toolByKeyRef.current[connId]?.color || color;
                             if (name === 'Pointing_Up' && tool !== 'pen') {
                               setTool('pen');
-                              toolByKeyRef.current[connId] = { tool: 'pen', color };
-                              channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color } });
+                              toolByKeyRef.current[connId] = { tool: 'pen', color: currentColor };
+                              channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color: currentColor } });
                             } else if (name === 'Open_Palm' && tool !== 'eraser') {
                               setTool('eraser');
-                              toolByKeyRef.current[connId] = { tool: 'eraser', color };
-                              channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color } });
+                              toolByKeyRef.current[connId] = { tool: 'eraser', color: currentColor };
+                              channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color: currentColor } });
                             }
                           }
 
@@ -851,7 +875,9 @@ export default function RoomPage() {
                             const hx = (1 - tip.x) * rect.width;
                             const hy = tip.y * rect.height;
                             if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
-                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color, width: 3, userId: self?.id || connId };
+                              const currentColor = toolByKeyRef.current[connId]?.color || color;
+                              console.log('[Gesture Pointing_Up] Creating stroke - connId:', connId, 'currentColor:', currentColor, 'toolByKeyRef:', JSON.stringify(toolByKeyRef.current[connId]));
+                              const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: currentColor, width: 3, userId: self?.id || connId };
                               currentStrokeRef.current = stroke;
                               strokesRef.current = [...strokesRef.current, stroke];
                               channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
@@ -962,14 +988,15 @@ export default function RoomPage() {
                             }
                             
                             if (!currentStrokeRef.current && name) {
+                              const currentColor = toolByKeyRef.current[connId]?.color || color;
                               if (name === 'Pointing_Up' && tool !== 'pen') {
                                 setTool('pen');
-                                toolByKeyRef.current[connId] = { tool: 'pen', color };
-                                channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color } });
+                                toolByKeyRef.current[connId] = { tool: 'pen', color: currentColor };
+                                channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color: currentColor } });
                               } else if (name === 'Open_Palm' && tool !== 'eraser') {
                                 setTool('eraser');
-                                toolByKeyRef.current[connId] = { tool: 'eraser', color };
-                                channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color } });
+                                toolByKeyRef.current[connId] = { tool: 'eraser', color: currentColor };
+                                channel.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'eraser', color: currentColor } });
                               }
                             }
 
@@ -977,7 +1004,8 @@ export default function RoomPage() {
                               const hx = (1 - tip.x) * rect.width;
                               const hy = tip.y * rect.height;
                               if (!gestureStrokeActiveRef.current && !currentStrokeRef.current) {
-                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color, width: 3, userId: self?.id || connId };
+                                const currentColor = toolByKeyRef.current[connId]?.color || color;
+                                const stroke: Stroke = { id: crypto.randomUUID(), points: [{ x: hx, y: hy }], color: currentColor, width: 3, userId: self?.id || connId };
                                 currentStrokeRef.current = stroke;
                                 strokesRef.current = [...strokesRef.current, stroke];
                                 channel.send({ type: 'broadcast', event: 'stroke-start', payload: stroke });
@@ -1048,7 +1076,7 @@ export default function RoomPage() {
                 }}
                 className={`px-3 py-2 rounded-md text-sm border ${handAndGesturesEnabled ? 'bg-black text-white border-black' : 'border-gray-200'}`}
               >
-                Hands-Off Mode
+                Magic Mode
               </button>
               {elevenLabsActive && (
                 <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-red-50 border border-red-200">
