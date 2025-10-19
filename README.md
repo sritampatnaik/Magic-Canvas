@@ -149,7 +149,7 @@ npm install
 
 ### 6. Configure Environment Variables
 
-Create a `.env.local` file in the `web` directory:
+Create a `.env.local` file
 
 ```bash
 # Supabase
