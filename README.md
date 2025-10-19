@@ -78,27 +78,120 @@ A keyboard-less and mouse-less multiplayer whiteboard that uses webcam gestures 
    - Select areas with the Victory gesture to generate AI artwork
 5. **Real-time Sync**: All actions are broadcast to other users in the room via Supabase Realtime
 
-## Getting Started
+## How to Set It Up
 
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   npm install
+### Prerequisites
+
+- Node.js 18+ installed
+- A webcam (for gesture control)
+- A microphone (for voice control)
+
+### 1. Clone the Repository
+
+```bash
+git clone <your-repo-url>
+cd cursor-hackathon/web
+```
+
+### 2. Install Dependencies
+
+```bash
+npm install
+```
+
+### 3. Set Up Supabase
+
+1. Create a new project at [supabase.com](https://supabase.com)
+2. Go to **Project Settings** → **API** and copy:
+   - Project URL
+   - `anon` public key
+   - `service_role` key (keep this secret!)
+3. In the **SQL Editor**, run the schema from `supabase.sql`:
+
+   ```sql
+   create table public.rooms (
+     id uuid primary key default gen_random_uuid(),
+     slug text unique not null,
+     created_at timestamptz default now()
+   );
+
+   alter table public.rooms enable row level security;
+
+   create policy "Allow public read" on public.rooms for select using (true);
+   create policy "Allow service role insert" on public.rooms for insert with check (true);
    ```
-3. Set up environment variables in `.env.local`:
-   ```
-   NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
-   SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-   FAL_KEY=your_fal_api_key
-   ELEVENLABS_API_KEY=your_elevenlabs_api_key
-   ELEVENLABS_AGENT_ID=your_elevenlabs_agent_id
-   ```
-4. Run the development server:
-   ```bash
-   npm run dev
-   ```
-5. Open [http://localhost:3000](http://localhost:3000)
+
+4. Create a Storage bucket:
+   - Go to **Storage** → **Create bucket**
+   - Name: `whiteboard-images`
+   - Make it **Public**
+
+### 4. Set Up Fal.ai
+
+1. Sign up at [fal.ai](https://fal.ai)
+2. Go to your [API Keys](https://fal.ai/dashboard/keys)
+3. Create a new API key and copy it
+
+### 5. Set Up ElevenLabs
+
+1. Sign up at [elevenlabs.io](https://elevenlabs.io)
+2. Create a **Conversational AI Agent**:
+   - Go to **Conversational AI** → **Create Agent**
+   - Name your agent (e.g., "Canvas Assistant")
+   - Configure the agent with a helpful system prompt
+3. Add **Client Tools** to your agent (see `ELEVENLABS_SETUP.md` for detailed JSON schemas):
+   - `change_pen_color` - Tool to change pen color
+   - `change_brush_size` - Tool to adjust brush size
+   - `generate_image` - Tool to generate AI images
+4. Copy your:
+   - **API Key** (from Settings → API Keys)
+   - **Agent ID** (from the agent's settings)
+
+### 6. Configure Environment Variables
+
+Create a `.env.local` file in the `web` directory:
+
+```bash
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key_here
+SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
+
+# Fal.ai
+FAL_KEY=your_fal_api_key_here
+
+# ElevenLabs
+ELEVENLABS_API_KEY=your_elevenlabs_api_key_here
+ELEVENLABS_AGENT_ID=your_agent_id_here
+```
+
+### 7. Run the Development Server
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### 8. Test the Features
+
+1. **Create a Room**: Click "Create Room" on the homepage
+2. **Set Up Your Profile**: Choose an avatar and enter your name
+3. **Enable Magic Mode**: Click the "Magic Mode" button to activate gesture and voice control
+4. **Allow Permissions**: Grant webcam and microphone access when prompted
+5. **Start Creating**:
+   - Point up ☝️ to draw
+   - Open palm ✋ to erase
+   - Victory sign ✌️ to select an area
+   - Thumbs up 👍 to activate voice assistant
+   - Say commands like "make the pen red" or "make the brush thicker"
+
+### Troubleshooting
+
+- **Gestures not working?** Make sure your webcam has good lighting and your hand is clearly visible
+- **Voice not responding?** Check microphone permissions and ensure ElevenLabs agent tools are configured correctly
+- **Real-time sync issues?** Verify Supabase Realtime is enabled for your project
+- **Image generation failing?** Check your Fal.ai API key and ensure you have credits
 
 ## Technical Highlights
 
