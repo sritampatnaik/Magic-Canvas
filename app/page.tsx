@@ -8,7 +8,7 @@ export default function Home() {
   return (
     <main className="min-h-screen flex items-center justify-center p-8">
       <div className="w-full max-w-lg text-center">
-        <h1 className="text-3xl font-semibold tracking-tight mb-6">Engelbart Canvas</h1>
+        <h1 className="text-3xl font-semibold tracking-tight mb-6">Magic Canvas</h1>
         <p className="text-gray-500 mb-8">Keyboard-less and Mouse-less multiplayer whiteboard. Use your webcam and mic to do gesture and voice control.</p>
         <button
           onClick={async () => {

@@ -1,4 +1,4 @@
-# Engelbart Canvas
+# Magic Canvas
 
 A keyboard-less and mouse-less multiplayer whiteboard that uses webcam gestures and voice control for a fully hands-free collaborative drawing experience.
 
@@ -6,7 +6,7 @@ A keyboard-less and mouse-less multiplayer whiteboard that uses webcam gestures 
 
 ## What I Built
 
-**Engelbart Canvas** is a real-time collaborative whiteboard that reimagines how we interact with digital canvases. Instead of using a keyboard and mouse, users control the canvas entirely through:
+**Magic Canvas** is a real-time collaborative whiteboard that reimagines how we interact with digital canvases. Instead of using a keyboard and mouse, users control the canvas entirely through:
 
 - **Hand Gestures** (via webcam): Draw, erase, and select areas using natural hand movements detected by your webcam
 - **Voice Commands**: Change pen colors, adjust brush sizes, and generate AI images using conversational voice control
