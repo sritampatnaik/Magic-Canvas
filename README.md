@@ -90,7 +90,7 @@ A keyboard-less and mouse-less multiplayer whiteboard that uses webcam gestures 
 
 ```bash
 git clone <your-repo-url>
-cd cursor-hackathon/web
+cd Magic-Canvas
 ```
 
 ### 2. Install Dependencies
