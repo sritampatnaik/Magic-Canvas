@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 
 export default function Home() {
   const [loading, setLoading] = useState(false);
@@ -82,7 +83,7 @@ export default function Home() {
               </svg>
             </a>
             <a href="https://ai.google.dev/gemini-api" target="_blank" rel="noreferrer" className="transition-opacity hover:opacity-80">
-              <img src="/gemini.png" alt="Google Gemini" className="h-10 w-auto" />
+              <Image src="/gemini.png" alt="Google Gemini" className="h-10 w-auto" width={120} height={40} />
             </a>
           </div>
         </div>

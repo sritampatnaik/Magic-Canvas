@@ -12,10 +12,11 @@ export async function POST(req: Request) {
     const supa = adminClient();
     // ensure bucket exists (public)
     try {
-      const { data: buckets } = await (supa.storage as any).listBuckets?.();
-      const exists = Array.isArray(buckets) && buckets.some((b: any) => b.name === BUCKET);
-      if (!exists && (supa.storage as any).createBucket) {
-        await (supa.storage as any).createBucket(BUCKET, { public: true });
+      const storage = supa.storage as { listBuckets?: () => Promise<{ data: Array<{ name: string }> | null }>; createBucket?: (name: string, options: { public: boolean }) => Promise<unknown> };
+      const { data: buckets } = await storage.listBuckets?.() || { data: null };
+      const exists = Array.isArray(buckets) && buckets.some((b) => b.name === BUCKET);
+      if (!exists && storage.createBucket) {
+        await storage.createBucket(BUCKET, { public: true });
       }
     } catch {}
 
@@ -33,8 +34,9 @@ export async function POST(req: Request) {
 
     const { data } = supa.storage.from(BUCKET).getPublicUrl(path);
     return NextResponse.json({ url: data.publicUrl });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || 'Upload failed' }, { status: 500 });
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'Upload failed';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 

@@ -29,9 +29,10 @@ export async function GET() {
 
     const data = await response.json();
     return NextResponse.json({ signedUrl: data.signed_url });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('ElevenLabs signed URL error:', error);
-    return NextResponse.json({ error: error.message || 'Failed to get signed URL' }, { status: 500 });
+    const message = error instanceof Error ? error.message : 'Failed to get signed URL';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 

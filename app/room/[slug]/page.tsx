@@ -31,8 +31,8 @@ export default function RoomPage() {
   const handEnabledRef = useRef<boolean>(false);
   const gesturesEnabledRef = useRef<boolean>(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const detectorRef = useRef<any>(null);
-  const gestureDetectorRef = useRef<any>(null);
+  const detectorRef = useRef<{ detectForVideo: (video: HTMLVideoElement, timestamp: number) => { landmarks?: Array<Array<{ x: number; y: number; z: number }>> } | null; close?: () => void } | null>(null);
+  const gestureDetectorRef = useRef<{ recognizeForVideo: (video: HTMLVideoElement, timestamp: number) => { gestures?: Array<Array<{ categoryName: string; score: number }>> } | null; close?: () => void } | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const lastDetectTsRef = useRef<number>(0);
   const originalConsoleInfoRef = useRef<typeof console.info | null>(null);
@@ -41,7 +41,6 @@ export default function RoomPage() {
   const gestureByKeyRef = useRef<Record<string, string>>({});
   const currentGestureEmojiRef = useRef<string | null>(null);
   const toolByKeyRef = useRef<Record<string, { tool: 'cursor' | 'pen' | 'eraser'; color: string }>>({});
-  const gestureDrawingRef = useRef<boolean>(false);
   const gestureStrokeActiveRef = useRef<boolean>(false);
   // Selection via Victory gesture
   const selectionActiveRef = useRef<boolean>(false);
@@ -71,7 +70,6 @@ export default function RoomPage() {
   const dragOffsetRef = useRef<Point>({ x: 0, y: 0 });
   const [tool, setTool] = useState<"cursor" | "pen" | "image" | "eraser" | "select">("cursor");
   const brushWidthRef = useRef<number>(3);
-  const [brushWidth, setBrushWidth] = useState(3);
   const activeStrokeIndexByIdRef = useRef<Record<string, number>>({});
   const [handAndGesturesEnabled, setHandAndGesturesEnabled] = useState(false);
   
@@ -102,18 +100,6 @@ export default function RoomPage() {
     return colorMap[normalized] || currentColor;
   };
 
-  const onAddImage = async () => {
-    try {
-      const url = window.prompt("Paste a public image URL");
-      if (!url) return;
-      const item: ImageItem = { id: crypto.randomUUID(), url, x: 100, y: 100, w: 320, h: 180 };
-      loadImageItem(item).then((loaded) => {
-        imagesRef.current = [...imagesRef.current, loaded];
-      });
-      channelRef.current?.send({ type: "broadcast", event: "image-add", payload: item });
-    } catch {}
-  };
-
   // ElevenLabs conversation lifecycle
   const startElevenLabs = async () => {
     // Prevent multiple simultaneous initialization attempts
@@ -140,8 +126,8 @@ export default function RoomPage() {
       const conversation = await Conversation.startSession({
         signedUrl,
         clientTools: {
-          change_pen_color: async (params: any) => {
-            const colorName = params?.color || params?.name || params?.colour || (typeof params === 'string' ? params : null);
+          change_pen_color: async (params: { color?: string; name?: string; colour?: string } | string) => {
+            const colorName = typeof params === 'string' ? params : (params?.color || params?.name || params?.colour);
             
             if (!colorName) {
               return 'I need you to specify which color you want. For example, say "change to red" or "make it blue".';
@@ -153,14 +139,10 @@ export default function RoomPage() {
             channelRef.current?.send({ type: 'broadcast', event: 'tool', payload: { key: connId, tool: 'pen', color: newColor } });
             return `Pen color changed to ${colorName}. Draw to see your new color!`;
           },
-          change_brush_size: async (params: any) => {
-            let size = params?.size || params?.thickness || params?.width;
+          change_brush_size: async (params: { size?: number | string; thickness?: number | string; width?: number | string; action?: string; increase?: boolean; decrease?: boolean } | string) => {
+            let size: number | string | undefined;
             
-            if (params?.action === 'increase' || params?.increase === true) {
-              size = Math.min(brushWidthRef.current + 3, 20);
-            } else if (params?.action === 'decrease' || params?.decrease === true) {
-              size = Math.max(brushWidthRef.current - 3, 1);
-            } else if (typeof params === 'string') {
+            if (typeof params === 'string') {
               const lower = params.toLowerCase();
               if (lower.includes('thick') || lower.includes('big') || lower.includes('large') || lower.includes('increase')) {
                 size = Math.min(brushWidthRef.current + 3, 20);
@@ -169,6 +151,14 @@ export default function RoomPage() {
               } else {
                 const parsed = parseInt(params);
                 if (!isNaN(parsed)) size = Math.max(1, Math.min(20, parsed));
+              }
+            } else {
+              size = params?.size || params?.thickness || params?.width;
+              
+              if (params?.action === 'increase' || params?.increase === true) {
+                size = Math.min(brushWidthRef.current + 3, 20);
+              } else if (params?.action === 'decrease' || params?.decrease === true) {
+                size = Math.max(brushWidthRef.current - 3, 1);
               }
             }
             
@@ -183,13 +173,12 @@ export default function RoomPage() {
             
             const newSize = Math.max(1, Math.min(20, size));
             brushWidthRef.current = newSize;
-            setBrushWidth(newSize);
             
             if (newSize <= 3) return `Brush is now thin (size ${newSize})`;
             else if (newSize <= 8) return `Brush is now medium (size ${newSize})`;
             else return `Brush is now thick (size ${newSize})`;
           },
-          generate_image: async (params: any) => {
+          generate_image: async (params: { prompt?: string }) => {
             console.log('═══════════════════════════════════════');
             console.log('[🎨 IMAGE GEN] 🚀 TOOL INVOKED!');
             console.log('[🎨 IMAGE GEN] Tool called with params:', params);
@@ -244,7 +233,7 @@ export default function RoomPage() {
               
               type FalGenResult = { data?: { images?: Array<{ url: string }> }; images?: Array<{ url: string }> };
               const result = await fal.subscribe('fal-ai/nano-banana/edit', {
-                input: { prompt: fullPrompt, image_urls: [dataUrl], sync_mode: true } as any,
+                input: { prompt: fullPrompt, image_urls: [dataUrl], sync_mode: true },
                 pollInterval: 1500,
                 logs: false,
               }) as FalGenResult;
@@ -269,10 +258,11 @@ export default function RoomPage() {
               console.log('[🎨 IMAGE GEN] ❌ No URL in result');
               setGenerating(false);
               return 'Failed to generate image - no URL returned';
-            } catch (error: any) {
+            } catch (error: unknown) {
               console.error('[🎨 IMAGE GEN] ❌ Error:', error);
               setGenerating(false);
-              return `Error generating image: ${error.message || 'Unknown error'}`;
+              const message = error instanceof Error ? error.message : 'Unknown error';
+              return `Error generating image: ${message}`;
             }
           }
         },
@@ -320,31 +310,6 @@ export default function RoomPage() {
     elevenLabsInitializingRef.current = false;
     setElevenLabsActive(false);
   };
-
-  function eraseAtPoint(x: number, y: number) {
-    const radius = 16;
-    const radiusSq = radius * radius;
-    let changed = false;
-    for (let i = 0; i < strokesRef.current.length; i++) {
-      const s = strokesRef.current[i];
-      const pts = s.points;
-      const filtered = [] as typeof pts;
-      for (let j = 0; j < pts.length; j++) {
-        const dx = pts[j].x - x;
-        const dy = pts[j].y - y;
-        if (dx * dx + dy * dy > radiusSq) filtered.push(pts[j]);
-      }
-      if (filtered.length !== pts.length) {
-        strokesRef.current[i] = { ...s, points: filtered };
-        changed = true;
-      }
-    }
-    if (changed && channelRef.current) {
-      for (const s of strokesRef.current) {
-        channelRef.current.send({ type: 'broadcast', event: 'stroke', payload: s });
-      }
-    }
-  }
 
   useEffect(() => {
     try { setShareUrl(`${window.location.origin}/room/${slug}/join`); } catch {}
@@ -416,7 +381,7 @@ export default function RoomPage() {
       }
 
       // render selection rectangles
-      for (const [id, rect] of Object.entries(selectionByKeyRef.current)) {
+      for (const rect of Object.values(selectionByKeyRef.current)) {
         if (!rect) continue;
         ctx.save();
         ctx.globalAlpha = 0.15;
@@ -754,14 +719,12 @@ export default function RoomPage() {
                 szctx.imageSmoothingQuality = 'high';
                 szctx.drawImage(src, 0, 0, sized.width, sized.height);
                 const dataUrl = sized.toDataURL('image/png');
-                const upRes = await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl, contentType: 'image/png' }) });
-                const upJson = await upRes.json();
-                const initUrl = upJson?.url;
+                await fetch('/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl, contentType: 'image/png' }) });
                 type FalGenResult = { data?: { images?: Array<{ url: string }> }; images?: Array<{ url: string }> };
                 // Prefer image-to-image nano-banana edit with inline base64
                 console.log('[FAL] Calling fal-ai/nano-banana/edit...');
                 const result = await fal.subscribe('fal-ai/nano-banana/edit', {
-                  input: { prompt, image_urls: [dataUrl], sync_mode: true } as any,
+                  input: { prompt, image_urls: [dataUrl], sync_mode: true },
                   pollInterval: 1500,
                   logs: false,
                 }) as FalGenResult;
@@ -831,27 +794,27 @@ export default function RoomPage() {
                   try {
                     if (!originalConsoleInfoRef.current) {
                       originalConsoleInfoRef.current = console.info;
-                      console.info = (...args: any[]) => {
+                      console.info = (...args: unknown[]) => {
                         const first = args?.[0];
                         if (typeof first === 'string' && first.includes('TensorFlow Lite XNNPACK delegate')) return;
-                        return originalConsoleInfoRef.current?.apply(console, args as any);
+                        return originalConsoleInfoRef.current?.apply(console, args);
                       };
                     }
                     if (!originalConsoleLogRef.current) {
                       originalConsoleLogRef.current = console.log;
-                      console.log = (...args: any[]) => {
+                      console.log = (...args: unknown[]) => {
                         const first = args?.[0];
                         if (typeof first === 'string' && first.includes('TensorFlow Lite XNNPACK delegate')) return;
-                        return originalConsoleLogRef.current?.apply(console, args as any);
+                        return originalConsoleLogRef.current?.apply(console, args);
                       };
                     }
                     // also suppress console.error for the same noisy Mediapipe info line
                     if (!originalConsoleErrorRef.current) {
                       originalConsoleErrorRef.current = console.error;
-                      console.error = (...args: any[]) => {
+                      console.error = (...args: unknown[]) => {
                         const first = args?.[0];
                         if (typeof first === 'string' && first.includes('TensorFlow Lite XNNPACK delegate')) return;
-                        return originalConsoleErrorRef.current?.apply(console, args as any);
+                        return originalConsoleErrorRef.current?.apply(console, args);
                       };
                     }
                     const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
@@ -1004,8 +967,8 @@ export default function RoomPage() {
                       requestAnimationFrame(rafLoop);
                     };
                     if ('requestVideoFrameCallback' in HTMLVideoElement.prototype) {
-                      const rvc = (video as any).requestVideoFrameCallback.bind(video);
-                      const onFrame = (_now: any, meta: any) => {
+                      const rvc = (video as { requestVideoFrameCallback: (callback: (now: number, metadata: { mediaTime: number }) => void) => void }).requestVideoFrameCallback.bind(video);
+                      const onFrame = (_now: number, meta: { mediaTime?: number }) => {
                         if (!handEnabledRef.current) return;
                         const canvas = canvasRef.current;
                         const channel = channelRef.current;
@@ -1169,117 +1132,6 @@ function resizeCanvas(canvas: HTMLCanvasElement) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function drawCursor(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  meta: { name: string; avatar: string; color: string }
-) {
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.25)";
-  ctx.shadowBlur = 6;
-  ctx.fillStyle = meta.color;
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x + 10, y + 20);
-  ctx.lineTo(x - 10, y + 20);
-  ctx.closePath();
-  ctx.fill();
-
-  const label = `${meta.avatar}  ${meta.name}`;
-  const paddingX = 10,
-    paddingY = 6;
-  ctx.font = "500 13px ui-sans-serif, system-ui, -apple-system";
-  const w = ctx.measureText(label).width + paddingX * 2;
-  const h = 26;
-  const rx = 10;
-  const px = x - w / 2,
-    py = y - 36 - h;
-  roundRect(ctx, px, py, w, h, rx);
-  ctx.fillStyle = "white";
-  ctx.fill();
-  ctx.fillStyle = "#111827";
-  ctx.fillText(label, px + paddingX, py + h - paddingY);
-  ctx.restore();
-}
-
-function drawEmojiCursor(ctx: CanvasRenderingContext2D, x: number, y: number, emoji: string) {
-  ctx.save();
-  ctx.font = "28px Apple Color Emoji, Noto Color Emoji, Segoe UI Emoji, emoji";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.shadowColor = "rgba(0,0,0,0.25)";
-  ctx.shadowBlur = 6;
-  ctx.fillText(emoji, x, y);
-  ctx.restore();
-}
-
-function drawPenCursor(ctx: CanvasRenderingContext2D, x: number, y: number, color: string) {
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.25)';
-  ctx.shadowBlur = 6;
-  // draw a small pen tip diamond
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.moveTo(x, y);
-  ctx.lineTo(x + 7, y + 12);
-  ctx.lineTo(x, y + 18);
-  ctx.lineTo(x - 7, y + 12);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-}
-
-function drawEraserCursor(ctx: CanvasRenderingContext2D, x: number, y: number) {
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.25)';
-  ctx.shadowBlur = 6;
-  ctx.strokeStyle = '#111827';
-  ctx.fillStyle = 'rgba(255,255,255,0.9)';
-  const r = 24;
-  ctx.beginPath();
-  ctx.arc(x, y + 10, r, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawDisabledCursor(ctx: CanvasRenderingContext2D, x: number, y: number) {
-  ctx.save();
-  // draw a gray circle with a slash (like disabled icon)
-  ctx.shadowColor = 'rgba(0,0,0,0.2)';
-  ctx.shadowBlur = 4;
-  ctx.strokeStyle = '#9CA3AF'; // gray-400
-  ctx.lineWidth = 2;
-  const r = 10;
-  ctx.beginPath();
-  ctx.arc(x, y + 10, r, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x - r * 0.7, y + 10 - r * 0.7);
-  ctx.lineTo(x + r * 0.7, y + 10 + r * 0.7);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function roundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-) {
-  r = Math.min(r, w / 2, h / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-
 function throttle<TArgs extends unknown[]>(fn: (...args: TArgs) => void, ms: number) {
   let last = 0;
   let t: ReturnType<typeof setTimeout> | undefined;
@@ -1333,7 +1185,7 @@ async function loadImageItem(item: ImageItem, sourceOverride?: string): Promise<
     const isBlobOrData = src.startsWith('blob:') || src.startsWith('data:');
     const tryLoad = (withCORS: boolean) => {
       const img = new Image();
-      if (withCORS && !isBlobOrData) (img as any).crossOrigin = 'anonymous';
+      if (withCORS && !isBlobOrData) img.crossOrigin = 'anonymous';
       img.onload = () => resolve({ ...item, img });
       img.onerror = () => {
         if (withCORS) tryLoad(false);
