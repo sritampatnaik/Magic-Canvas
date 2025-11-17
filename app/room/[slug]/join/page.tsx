@@ -3,7 +3,6 @@
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import AvatarPicker from "@/components/AvatarPicker";
-import ShareLink from "@/components/ShareLink";
 
 export default function JoinPage() {
   const params = useParams<{ slug: string }>();
@@ -12,7 +11,6 @@ export default function JoinPage() {
 
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState("😀");
-  const [shareUrl, setShareUrl] = useState<string>("");
 
   useEffect(() => {
     try {
@@ -22,10 +20,6 @@ export default function JoinPage() {
         if (parsed?.name) setName(parsed.name);
         if (parsed?.avatar) setAvatar(parsed.avatar);
       }
-    } catch {}
-    // Compute share URL after mount to avoid SSR mismatch
-    try {
-      setShareUrl(`${window.location.origin}/room/${slug}/join`);
     } catch {}
   }, [slug]);
 
@@ -60,9 +54,55 @@ export default function JoinPage() {
             Enter room
           </button>
         </div>
-        <div className="pt-4">
-          <p className="text-sm text-gray-500 mb-2">Invite others with this link:</p>
-          <ShareLink url={shareUrl} />
+        
+        {/* Hand Gestures Help Section */}
+        <div className="mt-8 pt-6 border-t border-gray-200">
+          <h2 className="text-lg font-semibold mb-4">🪄 Hand Gesture Controls</h2>
+          <p className="text-sm text-gray-600 mb-4">
+            Once inside, enable <strong>Magic Mode</strong> to control the canvas with hand gestures:
+          </p>
+          <div className="space-y-3">
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-50">
+              <span className="text-2xl">☝️</span>
+              <div>
+                <p className="font-medium text-sm">Pointing Up</p>
+                <p className="text-xs text-gray-600">Draw with pen - point and move to create strokes</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-50">
+              <span className="text-2xl">✋</span>
+              <div>
+                <p className="font-medium text-sm">Open Palm</p>
+                <p className="text-xs text-gray-600">Eraser - move your palm to erase drawings</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-50">
+              <span className="text-2xl">✌️</span>
+              <div>
+                <p className="font-medium text-sm">Victory / Peace</p>
+                <p className="text-xs text-gray-600">Select area - drag to create selection box for AI generation</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-50">
+              <span className="text-2xl">👍</span>
+              <div>
+                <p className="font-medium text-sm">Thumbs Up</p>
+                <p className="text-xs text-gray-600">Start voice assistant - talk to change colors, brush size, or generate images</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 p-3 rounded-lg bg-gray-50">
+              <span className="text-2xl">👎</span>
+              <div>
+                <p className="font-medium text-sm">Thumbs Down</p>
+                <p className="text-xs text-gray-600">Stop voice assistant</p>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 p-3 rounded-lg bg-blue-50 border border-blue-100">
+            <p className="text-xs text-blue-800">
+              <strong>💡 Tip:</strong> You can also use your mouse/trackpad with the toolbar buttons for traditional drawing!
+            </p>
+          </div>
         </div>
       </div>
     </main>

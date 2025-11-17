@@ -757,6 +757,56 @@ export default function RoomPage() {
           </button>
         </div>
       )}
+      
+      {/* Gesture Guide - Bottom Right */}
+      <div className="fixed bottom-4 right-4 z-10 max-w-xs">
+        <div className="rounded-xl border border-gray-200 bg-white/95 backdrop-blur shadow-lg">
+          <div className="px-4 py-3 border-b border-gray-200">
+            <h3 className="font-semibold text-sm flex items-center gap-2">
+              <Hand className="w-4 h-4" />
+              Gesture Controls
+            </h3>
+          </div>
+          <div className="p-3 space-y-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">☝️</span>
+              <span className="text-gray-700">Point to draw</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-lg">✋</span>
+              <span className="text-gray-700">Palm to erase</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-lg">✌️</span>
+              <span className="text-gray-700">Victory to select</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-lg">👍</span>
+              <span className="text-gray-700">Thumbs up for voice</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-lg">👎</span>
+              <span className="text-gray-700">Thumbs down to stop</span>
+            </div>
+          </div>
+          {handAndGesturesEnabled && (
+            <div className="px-3 pb-3">
+              <div className="text-xs text-green-700 bg-green-50 rounded-md px-2 py-1.5 border border-green-200">
+                ✓ Magic Mode Active
+              </div>
+            </div>
+          )}
+          {elevenLabsActive && (
+            <div className="px-3 pb-3">
+              <div className="text-xs text-red-700 bg-red-50 rounded-md px-2 py-1.5 border border-red-200 flex items-center gap-1.5">
+                <Mic className="w-3 h-3" />
+                Voice Assistant Active
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
       <div className="fixed top-3 left-1/2 -translate-x-1/2 z-10 w-[min(720px,92vw)]">
         <div className="rounded-xl border border-gray-200 bg-white/90 backdrop-blur px-4 py-2 shadow-sm">
           <div className="flex items-center justify-between gap-3">
